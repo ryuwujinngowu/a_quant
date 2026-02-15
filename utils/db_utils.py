@@ -318,6 +318,61 @@ class DBConnector:
                 conn.rollback()
             return None
 
+    def get_all_a_stock_codes(self) -> List[str]:
+        """
+        从stock_basic表获取全市场A股代码列表（已上市，list_status='L'）
+        返回：有效A股代码列表（格式如600000.SH）
+        """
+        logger.info("===== 从stock_basic表读取全市场A股代码 =====")
+        try:
+            # 查询SQL（精准匹配A股代码格式）
+            sql = "SELECT DISTINCT ts_code FROM stock_basic WHERE list_status = 'L' "
+            # 使用query方法返回DataFrame（return_df=True）
+            df_codes = self.query(sql, return_df=True)
+
+            if df_codes.empty:
+                logger.warning("stock_basic表中无有效A股代码")
+                return []
+
+            codes = df_codes["ts_code"].dropna().tolist()
+            logger.info(f"成功获取 {len(codes)} 只有效A股代码")
+            return codes
+        except Exception as e:
+            logger.error(f"读取股票代码失败：{str(e)}", exc_info=True)
+            return []
+
+    def add_table_column(self, table_name: str, col_name: str, col_type: str = "VARCHAR(255)",
+                         comment: str = "") -> bool:
+        """
+        自动给数据库表新增字段（仅当字段不存在时）
+        扩展：支持添加字段注释
+        :param table_name: 表名
+        :param col_name: 新增字段名
+        :param col_type: 字段类型（默认VARCHAR(255)）
+        :param comment: 字段注释（可选）
+        :return: 是否新增成功
+        """
+        # 先检查字段是否已存在
+        table_columns = self.get_table_columns(table_name)
+        if col_name in table_columns:
+            logger.info(f"字段{col_name}已存在于表{table_name}，无需新增")
+            return True
+
+        try:
+            # 构建新增字段SQL（兼容MySQL，支持注释）
+            sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+            if comment:
+                sql += f" COMMENT '{comment}'"
+            else:
+                sql += f" DEFAULT '' COMMENT '{col_name}（Tushare自动新增）'"
+
+            self.execute(sql)
+            logger.info(f"表{table_name}新增字段{col_name}成功，类型：{col_type}，注释：{comment}")
+            return True
+        except Exception as e:
+            logger.error(f"表{table_name}新增字段{col_name}失败：{str(e)}")
+            return False
+
 
 # 全局单例实例（项目中直接导入该实例即可使用，无需重复创建）
 db = DBConnector()

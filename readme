@@ -14,6 +14,7 @@ a_quant/
 ├── backtest/     #支持模拟回搠，输入历史数据，调用策略，结束策略，模拟收益。计算偏离，机器学习，最终微调策略。
 │   ├── engine.py        # 回测引擎
 │   └── metrics.py         # 回测指标
+    └── backtest.log       # 回测详细记录
 ├── learnEngine/            #机器学习模型
 │   ├──
 │   └──
