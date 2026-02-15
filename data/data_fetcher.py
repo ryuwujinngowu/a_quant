@@ -9,7 +9,6 @@ from utils.log_utils import logger
 # 初始化配置
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env")
 load_dotenv(CONFIG_PATH)
-
 TS_TOKEN = os.getenv("TS_TOKEN", "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3")
 try:
     ts.set_token(TS_TOKEN)
@@ -176,19 +175,19 @@ data_fetcher = DataFetcher()
 # 测试代码
 if __name__ == "__main__":
     """测试stock_basic"""
-    # try:
-    #     # 1. 测试股票基础数据获取（修正exchange参数：SHSE=上交所，空则返回全部）
-    #     logger.info("===== 测试：获取A股上市股票基础数据（全字段） =====")
-    #     stock_base_df = data_fetcher.get_stockbase(
-    #         exchange="SSE",  # 可选：仅上交所，注释则返回所有交易所
-    #         list_status="L",  # 仅上市股票
-    #     )
-    #     if stock_base_df is not None:
-    #         logger.info(f"股票基础数据预览（前3行）：\n{stock_base_df.head(3)}")
-    #
-    #     logger.info("\n===== 所有数据获取测试完成 ✅ =====")
-    # except Exception as e:
-    #     logger.error(f"数据获取测试失败，错误信息：{str(e)} ❌")
+    try:
+        # 1. 测试股票基础数据获取（修正exchange参数：SHSE=上交所，空则返回全部）
+        logger.info("===== 测试：获取A股上市股票基础数据（全字段） =====")
+        stock_base_df = data_fetcher.get_stockbase(
+            exchange="SSE",  # 可选：仅上交所，注释则返回所有交易所
+            list_status="L",  # 仅上市股票
+        )
+        if stock_base_df is not None:
+            logger.info(f"股票基础数据预览（前3行）：\n{stock_base_df.head(3)}")
+
+        logger.info("\n===== 所有数据获取测试完成 ✅ =====")
+    except Exception as e:
+        logger.error(f"数据获取测试失败，错误信息：{str(e)} ❌")
     """测试新增的stock_company接口"""
     # try:
     #     # 1. 测试获取单只股票的公司信息
@@ -208,12 +207,12 @@ if __name__ == "__main__":
     # except Exception as e:
     #     logger.error(f"接口测试失败，错误信息：{str(e)} ❌")
     """测试新增的Kline_day接口"""
-    logger.info("===== 测试：获取日线数据 =====")
-    stock_Kline_day = data_fetcher.fetch_kline_day(
-        ts_code="000001.SZ ",
-        trade_date="20241231"
-    )
-    if stock_Kline_day is not None:
-        logger.info(f"日线数据预览：\n{stock_Kline_day.head(3)}")
-    logger.info("\n=====获取日线数据测试完成 ✅ =====")
+    # logger.info("===== 测试：获取日线数据 =====")
+    # stock_Kline_day = data_fetcher.fetch_kline_day(
+    #     ts_code="000001.SZ ",
+    #     trade_date="20241231"
+    # )
+    # if stock_Kline_day is not None:
+    #     logger.info(f"日线数据预览：\n{stock_Kline_day.head(3)}")
+    # logger.info("\n=====获取日线数据测试完成 ✅ =====")
 

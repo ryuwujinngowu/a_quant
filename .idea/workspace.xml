@@ -4,24 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e2c1f11e-9780-4fce-acdf-c7fa40e7f7f6" name="更改" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/a_quant.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/config/.env" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/autoUpdating.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/bac.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/data_cleaner.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/data_fetcher.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/readme" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/structure.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/readme" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/db_utils.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/log_utils.py" afterDir="false" />
+    <list default="true" id="e2c1f11e-9780-4fce-acdf-c7fa40e7f7f6" name="更改" comment="v1.0">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/.env" beforeDir="false" afterPath="$PROJECT_DIR$/config/.env" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/data_cleaner.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/data_cleaner.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/data_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/data_fetcher.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -38,9 +25,13 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 4
-}]]></component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 4
+}</component>
   <component name="ProjectId" id="39dgfCXc4Z3oO9ZdTEbWHvc7fBI" />
   <component name="ProjectLevelVcsManager">
     <ConfirmationsSetting value="2" id="Add" />
@@ -57,6 +48,7 @@
     "Python.date_fetcher.executor": "Run",
     "Python.db_utils.executor": "Run",
     "Python.log_utils.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
@@ -64,7 +56,7 @@
     "git-widget-placeholder": "master",
     "junie.onboarding.icon.badge.shown": "true",
     "last_opened_file_path": "/Users/liusonghao/PycharmProjects/a_quant/data",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+    "settings.editor.selected.configurable": "ml.llm.LLMConfigurable",
     "to.speed.mode.migration.done": "true"
   }
 }]]></component>
@@ -73,7 +65,7 @@
       <recent name="$PROJECT_DIR$/data" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.data_fetcher">
+  <component name="RunManager" selected="Python.data_cleaner">
     <configuration name="data_cleaner" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="a_quant" />
       <option name="ENV_FILES" value="" />
@@ -168,8 +160,8 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Python.data_fetcher" />
         <item itemvalue="Python.data_cleaner" />
+        <item itemvalue="Python.data_fetcher" />
         <item itemvalue="Python.db_utils" />
         <item itemvalue="Python.log_utils" />
       </list>
@@ -190,6 +182,15 @@
       <option name="presentableId" value="Default" />
       <updated>1771031463999</updated>
     </task>
+    <task id="LOCAL-00001" summary="v1.0">
+      <option name="closed" value="true" />
+      <created>1771151424670</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1771151424670</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -197,10 +198,26 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State />
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="master" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
           </value>
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="v1.0" />
+    <option name="LAST_COMMIT_MESSAGE" value="v1.0" />
   </component>
 </project>

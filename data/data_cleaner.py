@@ -172,6 +172,88 @@ class DataCleaner:
         except Exception as e:
             logger.error(f"表{table_name}（stock_company）入库异常：{str(e)}", exc_info=True)
             return 0
+    def clean_and_insert_stockbase(self, table_name: str = "stock_basic") -> Optional[int]:
+        """股票基础数据全字段自动化入库（终极版）"""
+        logger.info("===== 开始股票基础数据全字段自动化入库（终极版） =====")
+        logger.info(f"目标表名：{table_name}")
+
+        # 1. 获取接口全字段原始数据
+        raw_df = data_fetcher.get_stockbase(list_status="L")
+        if raw_df is None or raw_df.empty:
+            logger.warning("接口返回原始数据为空，跳过入库")
+            return 0
+
+        # 2. 终极格式清洗（100%保障exchange非空）
+        cleaned_df = self._clean_special_fields(raw_df)
+        if cleaned_df.empty:
+            return 0
+
+        # 3. 获取数据库表现有字段
+        db_columns = db.get_table_columns(table_name)
+        exclude_columns = ["id", "created_at", "updated_at"]
+        db_columns = [col for col in db_columns if col not in exclude_columns]
+
+        # 4. 对比接口字段和数据库字段，找出缺失字段
+        api_columns = cleaned_df.columns.tolist()
+        missing_columns = [col for col in api_columns if col not in db_columns]
+
+        # 5. 自动新增缺失字段到数据库（新增字段时强制加默认值）
+        if missing_columns:
+            logger.info(f"数据库表{table_name}缺失字段：{missing_columns}，开始自动新增")
+            col_type_mapping = {
+                "list_date": "DATE NOT NULL DEFAULT '1970-01-01'",
+                "delist_date": "DATE DEFAULT NULL",
+                "total_share": "BIGINT DEFAULT 0",
+                "float_share": "BIGINT DEFAULT 0",
+                "free_share": "BIGINT DEFAULT 0",
+                "total_mv": "DECIMAL(20,2) DEFAULT 0.00",
+                "circ_mv": "DECIMAL(20,2) DEFAULT 0.00",
+                "exchange": "VARCHAR(8) NOT NULL DEFAULT 'UNKNOWN'",
+                "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
+                "symbol": "VARCHAR(6) NOT NULL DEFAULT 'UNKNOWN'",
+                "name": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'"
+            }
+            for col in missing_columns:
+                col_type = col_type_mapping.get(col, "VARCHAR(255) NOT NULL DEFAULT ''")
+                db.add_table_column(table_name, col, col_type)
+
+        # 6. 重新获取数据库字段（包含新增字段）
+        final_db_columns = db.get_table_columns(table_name)
+        final_db_columns = [col for col in final_db_columns if col not in exclude_columns]
+
+        # 7. 过滤出接口和数据库共有的字段
+        common_columns = [col for col in api_columns if col in final_db_columns]
+        final_df = cleaned_df[common_columns].copy()
+
+        # # 8. 最终验证：确保exchange在入库字段中且非空
+        # if "exchange" in final_df.columns:
+        #     final_exchange_null = final_df["exchange"].isnull().sum()
+        #     if final_exchange_null > 0:
+        #         logger.critical(f"入库前exchange仍有{final_exchange_null}个空值，强制填充UNKNOWN")
+        #         final_df["exchange"] = final_df["exchange"].fillna("UNKNOWN")
+        # else:
+        #     logger.warning("入库字段中无exchange，手动添加并赋值UNKNOWN")
+        #     final_df["exchange"] = "UNKNOWN"
+
+        # 9. 批量入库（重复数据自动更新）
+        try:
+            affected_rows = db.batch_insert_df(
+                df=final_df,
+                table_name=table_name,
+                ignore_duplicate=True
+            )
+            if affected_rows is None:
+                logger.error(f"表{table_name}全字段入库失败")
+                return 0
+            logger.info(f"表{table_name}全字段入库完成，影响行数：{affected_rows}，入库字段数：{len(common_columns)}")
+            # 最终验证入库结果
+            # if "exchange" in common_columns:
+            #     logger.info(f"exchange字段入库示例：\n{final_df[['ts_code', 'name', 'exchange']].head(5)}")
+            # return affected_rows
+        except Exception as e:
+            logger.error(f"表{table_name}全字段入库异常：{str(e)}")
+            return 0
+
 
 
 # 全局实例
@@ -182,5 +264,5 @@ if __name__ == "__main__":
     """基础信息表入库/更新"""
     affected_rows = data_cleaner.clean_and_insert_stockbase(table_name="stock_basic")
     """stock_company表入库"""
-    affected_rows = data_cleaner.clean_and_insert_stockcompany(table_name="stock_company")
-    logger.info(f"stock_company入库测试完成：入库/更新行数 {affected_rows}")
+    # affected_rows = data_cleaner.clean_and_insert_stockcompany(table_name="stock_company")
+    # logger.info(f"stock_company入库测试完成：入库/更新行数 {affected_rows}")
