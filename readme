@@ -1,0 +1,23 @@
+a_quant/
+├── config/
+│   └── config.py          # 全局配置
+├── data/
+│   ├── fetcher.py         # 网络数据获取
+│   ├── cleaner.py         # 数据清洗
+│   ├── autoUpdating       #每日定时执行，更新每日迭代的价格信息，也包括最新数据，所属概念的更新等。
+│   └── data_api.py        # 统一数据入口
+├── features/    #特征计算，例如均线计算口径，量化情绪需要计算的种种数据的口径，作为后期机器学习时策略的因子。
+│   └── technical.py       # 技术指标特征，区间最高价，最低价，支撑判断口径
+├── strategies/
+│   ├── base_strategy.py   # 策略基类，共用策略，调用features判断情绪，节点，强度，主动。
+│   └── ma_strategy.py     # 双均线策略，个人策略，各大佬策略
+├── backtest/     #支持模拟回搠，输入历史数据，调用策略，结束策略，模拟收益。计算偏离，机器学习，最终微调策略。
+│   ├── engine.py        # 回测引擎
+│   └── metrics.py         # 回测指标
+├── learnEngine/            #机器学习模型
+│   ├──
+│   └──
+├── utils/
+        logs               #日志记录
+│   └── common.py          # 工具函数
+└── main.py                # 程序入口
