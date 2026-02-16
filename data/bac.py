@@ -4,7 +4,7 @@ from typing import Optional, Dict, List
 
 from utils.log_utils import logger
 from utils.db_utils import db
-from utils.tools import calc_15_years_date_range, escape_mysql_reserved_words
+from utils.common_tools import calc_15_years_date_range, escape_mysql_reserved_words
 from data.data_fetcher import data_fetcher
 
 

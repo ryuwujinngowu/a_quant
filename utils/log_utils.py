@@ -108,7 +108,7 @@ class LogUtils:
         self._logger.addHandler(file_handler)
 
         # 仅打印一次初始化信息（减少日志输出）
-        self._logger.info(f"日志器初始化完成 | 带时间日志文件：{log_file_path} | 等级：{log_level}")
+        # self._logger.info(f"日志器初始化完成 | 带时间日志文件：{log_file_path} | 等级：{log_level}")
 
     @property
     def logger(self) -> logging.Logger:

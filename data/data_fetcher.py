@@ -46,34 +46,40 @@ class DataFetcher:
         # 2. 显式指定Tushare stock_basic所有字段（从官方文档复制，确保全量）
         # 字段列表来自Tushare官方文档v2版本，覆盖所有可返回字段
         ALL_FIELDS = [
-            "ts_code", "symbol", "name", "area", "industry", "market",
-            "list_date", "delist_date", "curr_type", "list_status",
-            "exchange", "is_hs", "act_name", "act_ent_type", "org_name",
-            "province", "city", "introduction", "website", "email",
-            "office", "employees", "main_business", "business_scope",
-            "fullname", "enname", "spell", "industry_code", "csrc_code",
-            "total_share", "float_share", "free_share", "total_mv", "circ_mv",
-            "turnover", "pe", "pb", "esp", "bvps", "profit", "profit_yoy",
-            "rev_yoy", "total_rev", "asset_ratio", "roe", "gps", "dp", "dp_yield"
+            "ts_code",
+            "symbol",
+            "name",
+            "area",
+            "industry",
+            "cnspell",
+            "market",
+            "list_date",
+            "act_name",
+            "act_ent_type",
+            "exchange",
+            "curr_type",
+            "list_status",
+            "delist_date",
+            "is_hs",
+            "enname",
+            "fullname"
         ]
 
         try:
-            logger.info(f"开始获取股票基础数据（全字段），参数：{params}")
+            logger.debug(f"开始获取股票基础数据（全字段），参数：{params}")
             # 核心：显式传入fields参数，指定所有字段（逗号分隔）
             df = pro.stock_basic(**params, fields=",".join(ALL_FIELDS))
 
             if df.empty:
-                logger.warning(f"股票基础数据获取成功，但返回空数据，参数：{params}")
+                logger.warning(f"股票基础数据接口返回空数据，参数：{params}")
             else:
-                logger.info(f"股票基础数据获取成功：行数={len(df)}，返回字段数={len(df.columns)}")
-                logger.info(f"返回字段列表：{df.columns.tolist()}")
-                # 验证关键字段是否存在（如exchange、act_name等）
-                key_fields = ["exchange", "act_name", "fullname", "enname"]
-                missing_key_fields = [f for f in key_fields if f not in df.columns]
-                if missing_key_fields:
-                    logger.warning(f"部分关键字段未返回：{missing_key_fields}（权限/接口版本问题）")
-                else:
-                    logger.info("所有关键字段均已返回 ✅")
+                logger.debug(f"股票基础数据获取成功：行数={len(df)}，返回字段数={len(df.columns)}")
+                logger.debug(f"返回字段列表：{df.columns.tolist()}")
+                # # 验证关键字段是否存在（如exchange、act_name等）
+                # key_fields = ["exchange", "act_name", "fullname", "enname"]
+                # missing_key_fields = [f for f in key_fields if f not in df.columns]
+                # if missing_key_fields:
+                #     logger.warning(f"部分关键字段未返回：{missing_key_fields}（权限/接口版本问题）")
             return df
         except Exception as e:
             logger.error(f"股票基础数据获取失败，参数：{params}，错误信息：{str(e)}")
@@ -163,8 +169,8 @@ class DataFetcher:
         }
         # 调用Tushare日线接口
         df = pro.daily(**params)
-        logger.info(f"日线数据获取，参数：\n{params}")
-        logger.info(f"日线数据获取行数：{len(df)}")
+        logger.debug(f"日线数据获取，参数：\n{params}")
+        logger.debug(f"日线数据获取行数：{len(df)}")
         return df
     # 其他预留函数（get_trade_calendar/get_kline_day等）保持不变...
 

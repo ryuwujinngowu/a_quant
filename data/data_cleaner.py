@@ -6,7 +6,7 @@ from utils.log_utils import logger
 from utils.db_utils import db
 from data.data_fetcher import data_fetcher
 from typing import Optional, Dict, List, Tuple
-from utils.tools import calc_15_years_date_range
+from utils.common_tools import calc_15_years_date_range
 class DataCleaner:
     """数据清洗+入库核心类（终极版：100%保障exchange非空）"""
 
@@ -14,17 +14,17 @@ class DataCleaner:
         """通用格式清洗（终极版：强制保障exchange字段存在且非空）"""
         df_cleaned = df.copy()
 
-        # ====================== 核心强化：exchange字段100%非空 ======================
-        # 1. 如果接口未返回exchange字段，手动添加
-        if "exchange" not in df_cleaned.columns:
-            logger.warning("接口未返回exchange字段，手动添加并赋值为UNKNOWN")
-            df_cleaned["exchange"] = "UNKNOWN"
-        else:
-            # 2. 映射交易所名称（上证→SSE，深证→SZSE，北交→BSE）
-            exchange_map = {"上证": "SSE", "深证": "SZSE", "北交": "BSE"}
-            df_cleaned["exchange"] = df_cleaned["exchange"].replace(exchange_map)
-            # 3. 强制填充空值（包括NaN/空字符串/None）
-            df_cleaned["exchange"] = df_cleaned["exchange"].replace(["", np.nan, None], "UNKNOWN")
+
+        # # 1. 如果接口未返回exchange字段，手动添加
+        # if "exchange" not in df_cleaned.columns:
+        #     logger.warning("接口未返回exchange字段，手动添加并赋值为UNKNOWN")
+        #     df_cleaned["exchange"] = "UNKNOWN"
+        # else:
+        #     # 2. 映射交易所名称（上证→SSE，深证→SZSE，北交→BSE）
+        #     exchange_map = {"上证": "SSE", "深证": "SZSE", "北交": "BSE"}
+        #     df_cleaned["exchange"] = df_cleaned["exchange"].replace(exchange_map)
+        #     # 3. 强制填充空值（包括NaN/空字符串/None）
+        #     df_cleaned["exchange"] = df_cleaned["exchange"].replace(["", np.nan, None], "UNKNOWN")
 
         # ====================== 其他字段清洗 ======================
         # 日期字段格式统一
@@ -34,8 +34,6 @@ class DataCleaner:
                 df_cleaned[field] = pd.to_datetime(
                     df_cleaned[field], format="%Y%m%d", errors="coerce"
                 ).dt.strftime("%Y-%m-%d")
-                # 日期字段非空保障
-                df_cleaned[field] = df_cleaned[field].fillna("1970-01-01")
 
         # 股票代码格式校验+非空保障
         if "ts_code" in df_cleaned.columns:
@@ -44,7 +42,6 @@ class DataCleaner:
         else:
             logger.warning("接口未返回ts_code字段，手动添加并赋值为UNKNOWN")
             df_cleaned["ts_code"] = "UNKNOWN"
-
         # 核心NOT NULL字段非空兜底
         not_null_fields = ["ts_code", "symbol", "name", "exchange", "list_date"]
         for field in not_null_fields:
@@ -66,14 +63,76 @@ class DataCleaner:
                 elif "datetime" in str(df_cleaned[col].dtype):
                     df_cleaned[col] = df_cleaned[col].fillna(None)
 
-        # 最终验证exchange字段是否非空
-        exchange_null_count = df_cleaned["exchange"].isnull().sum()
-        if exchange_null_count > 0:
-            logger.error(f"exchange字段仍有{exchange_null_count}个空值，强制填充为UNKNOWN")
-            df_cleaned["exchange"] = df_cleaned["exchange"].fillna("UNKNOWN")
 
-        logger.info(f"格式清洗完成，exchange字段非空验证通过，行数：{len(df_cleaned)}")
+        # 最终验证exchange字段是否非空
+        # exchange_null_count = df_cleaned["exchange"].isnull().sum()
+        # if exchange_null_count > 0:
+        #     logger.error(f"exchange字段仍有{exchange_null_count}个空值，强制填充为UNKNOWN")
+        #     df_cleaned["exchange"] = df_cleaned["exchange"].fillna("UNKNOWN")
+        #
+        # logger.info(f"格式清洗完成，exchange字段非空验证通过，行数：{len(df_cleaned)}")
         return df_cleaned
+
+
+    def auto_add_missing_table_columns(
+            table_name: str,
+            missing_columns: list,
+            col_type_mapping: dict = None,
+            logger=None
+    ) -> bool:
+        """
+        通用方法：自动为数据库表新增缺失字段（带默认值，避免插入NULL/NaN报错）
+
+        Args:
+            table_name: 数据库表名
+            missing_columns: 需要新增的字段列表
+            col_type_mapping: 字段类型映射（key=字段名, value=字段类型+默认值），不传则使用默认类型
+            logger: 日志对象（可选）
+
+        Returns:
+            bool: 新增是否成功（全部成功返回True，部分/全部失败返回False）
+        """
+
+        # 默认字段类型映射（适配大部分场景，可被传入的映射覆盖）
+        default_col_type_mapping = {
+            # 通用默认类型：数值型/日期型/字符串型
+            "list_date": "DATE NOT NULL DEFAULT '1970-01-01'",
+            "delist_date": "DATE DEFAULT NULL",
+            "total_share": "BIGINT DEFAULT 0",
+            "float_share": "BIGINT DEFAULT 0",
+            "free_share": "BIGINT DEFAULT 0",
+            "total_mv": "DECIMAL(20,2) DEFAULT 0.00",
+            "circ_mv": "DECIMAL(20,2) DEFAULT 0.00",
+            # 通用字符串字段默认值
+            "exchange": "VARCHAR(8) NOT NULL DEFAULT 'UNKNOWN'",
+            "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
+            "symbol": "VARCHAR(6) NOT NULL DEFAULT 'UNKNOWN'",
+            "name": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'",
+            # 兜底默认类型（未指定的字段都用这个）
+            "default": "VARCHAR(255) NOT NULL DEFAULT ''"
+        }
+
+        # 合并默认映射和传入的映射（传入的优先级更高）
+        final_col_type_mapping = default_col_type_mapping.copy()
+        if col_type_mapping:
+            final_col_type_mapping.update(col_type_mapping)
+
+        success = True
+        for col in missing_columns:
+            try:
+                # 获取字段类型，无指定则用兜底类型
+                col_type = final_col_type_mapping.get(col, final_col_type_mapping["default"])
+                # 调用原有新增字段方法
+                db.add_table_column(table_name, col, col_type)
+                if logger:
+                    logger.info(f"表{table_name}新增字段{col}成功，类型：{col_type}")
+            except Exception as e:
+                success = False
+                if logger:
+                    logger.error(f"表{table_name}新增字段{col}失败：{e}")
+
+        return success
+
 
     def clean_and_insert_stockcompany(self, table_name: str = "stock_company") -> Optional[int]:
         """
@@ -173,8 +232,7 @@ class DataCleaner:
             logger.error(f"表{table_name}（stock_company）入库异常：{str(e)}", exc_info=True)
             return 0
     def clean_and_insert_stockbase(self, table_name: str = "stock_basic") -> Optional[int]:
-        """股票基础数据全字段自动化入库（终极版）"""
-        logger.info("===== 开始股票基础数据全字段自动化入库（终极版） =====")
+        """股票基础数据全字段（"""
         logger.info(f"目标表名：{table_name}")
 
         # 1. 获取接口全字段原始数据
@@ -183,57 +241,43 @@ class DataCleaner:
             logger.warning("接口返回原始数据为空，跳过入库")
             return 0
 
-        # 2. 终极格式清洗（100%保障exchange非空）
+
         cleaned_df = self._clean_special_fields(raw_df)
         if cleaned_df.empty:
             return 0
 
         # 3. 获取数据库表现有字段
         db_columns = db.get_table_columns(table_name)
-        exclude_columns = ["id", "created_at", "updated_at"]
-        db_columns = [col for col in db_columns if col not in exclude_columns]
+        # exclude_columns = ["id", "created_at", "updated_at"]
+        # db_columns = [col for col in db_columns if col not in exclude_columns]
 
         # 4. 对比接口字段和数据库字段，找出缺失字段
         api_columns = cleaned_df.columns.tolist()
         missing_columns = [col for col in api_columns if col not in db_columns]
 
-        # 5. 自动新增缺失字段到数据库（新增字段时强制加默认值）
         if missing_columns:
             logger.info(f"数据库表{table_name}缺失字段：{missing_columns}，开始自动新增")
-            col_type_mapping = {
-                "list_date": "DATE NOT NULL DEFAULT '1970-01-01'",
-                "delist_date": "DATE DEFAULT NULL",
-                "total_share": "BIGINT DEFAULT 0",
-                "float_share": "BIGINT DEFAULT 0",
-                "free_share": "BIGINT DEFAULT 0",
-                "total_mv": "DECIMAL(20,2) DEFAULT 0.00",
-                "circ_mv": "DECIMAL(20,2) DEFAULT 0.00",
-                "exchange": "VARCHAR(8) NOT NULL DEFAULT 'UNKNOWN'",
-                "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
-                "symbol": "VARCHAR(6) NOT NULL DEFAULT 'UNKNOWN'",
-                "name": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'"
+
+            stockbase_col_mapping = {
+                # 如需覆盖通用映射，在此补充（示例：调整name字段长度）
+                "name": "VARCHAR(64) NOT NULL DEFAULT 'UNKNOWN'"
             }
-            for col in missing_columns:
-                col_type = col_type_mapping.get(col, "VARCHAR(255) NOT NULL DEFAULT ''")
-                db.add_table_column(table_name, col, col_type)
+            # 调用通用方法
+            add_success = db.auto_add_missing_table_columns(
+                table_name=table_name,
+                missing_columns=missing_columns,
+            )
+            if not add_success:
+                logger.warning(f"表{table_name}部分字段新增失败，继续执行后续逻辑")
 
         # 6. 重新获取数据库字段（包含新增字段）
         final_db_columns = db.get_table_columns(table_name)
-        final_db_columns = [col for col in final_db_columns if col not in exclude_columns]
+        # final_db_columns = [col for col in final_db_columns if col not in exclude_columns]
 
         # 7. 过滤出接口和数据库共有的字段
         common_columns = [col for col in api_columns if col in final_db_columns]
         final_df = cleaned_df[common_columns].copy()
 
-        # # 8. 最终验证：确保exchange在入库字段中且非空
-        # if "exchange" in final_df.columns:
-        #     final_exchange_null = final_df["exchange"].isnull().sum()
-        #     if final_exchange_null > 0:
-        #         logger.critical(f"入库前exchange仍有{final_exchange_null}个空值，强制填充UNKNOWN")
-        #         final_df["exchange"] = final_df["exchange"].fillna("UNKNOWN")
-        # else:
-        #     logger.warning("入库字段中无exchange，手动添加并赋值UNKNOWN")
-        #     final_df["exchange"] = "UNKNOWN"
 
         # 9. 批量入库（重复数据自动更新）
         try:
@@ -458,24 +502,24 @@ if __name__ == "__main__":
     # logger.info(f"stock_company入库测试完成：入库/更新行数 {affected_rows}")
 
     """日K数据全市场入库（核心测试）"""
-    # 方式1：全量测试
-    kline_affected_rows = data_cleaner.clean_and_insert_kline_day(table_name="kline_day")
-    logger.info(f"全市场日K数据入库完成，累计入库/更新行数：{kline_affected_rows}")
+    # # 方式1：全量测试
+    # kline_affected_rows = data_cleaner.clean_and_insert_kline_day(table_name="kline_day")
+    # logger.info(f"全市场日K数据入库完成，累计入库/更新行数：{kline_affected_rows}")
 
-    # # 方式2：单股票测试（调试用，注释掉方式1后打开）
-    # def test_single_kline_code():
-    #     """单股票日K数据测试"""
-    #     test_code = "000002.SZ"
-    #     raw_df = data_fetcher.fetch_kline_day(
-    #         ts_code=test_code,
-    #         start_date="20090215",
-    #         end_date="20260215"
-    #     )
-    #     cleaned_df = data_cleaner._clean_kline_day_data(raw_df)
-    #     affected_rows = db.batch_insert_df(
-    #         df=cleaned_df,
-    #         table_name="kline_day",
-    #         ignore_duplicate=True
-    #     )
-    #     logger.info(f"{test_code} 日K测试入库完成，影响行数：{affected_rows}")
-    # test_single_kline_code()
+    # 方式2：单股票测试（调试用，注释掉方式1后打开）
+    def test_single_kline_code():
+        """单股票日K数据测试"""
+        test_code = "000002.SZ"
+        raw_df = data_fetcher.fetch_kline_day(
+            ts_code=test_code,
+            start_date="20090215",
+            end_date="20260215"
+        )
+        cleaned_df = data_cleaner._clean_kline_day_data(raw_df)
+        affected_rows = db.batch_insert_df(
+            df=cleaned_df,
+            table_name="kline_day",
+            ignore_duplicate=True
+        )
+        logger.info(f"{test_code} 日K测试入库完成，影响行数：{affected_rows}")
+    test_single_kline_code()

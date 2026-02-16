@@ -26,7 +26,6 @@ def update_stock_basic():
     logger.info("===== 全量更新stock_basic表 =====")
     try:
         affected = cleaner.clean_and_insert_stockbase(table_name="stock_basic")
-        logger.info(f"stock_basic更新完成，影响行数：{affected}")
         return True
     except Exception as e:
         logger.error(f"stock_basic更新失败：{e}", exc_info=True)
@@ -34,7 +33,7 @@ def update_stock_basic():
 
 
 def update_kline_day_incremental(date_list: list):
-    """增量更新日线数据（按日期列表）"""
+    """增量更新日线数据（按日期列表）- 批量请求优化版"""
     if not date_list:
         return False
 
@@ -44,30 +43,63 @@ def update_kline_day_incremental(date_list: list):
         logger.error("无有效股票代码，终止日线更新")
         return False
 
+    # 配置：每批请求的股票数量（根据接口限制调整，比如200个/批）
+    BATCH_SIZE = 600
     total_affected = 0
+
     for trade_date in date_list:
         daily_affected = 0
-        for ts_code in stock_codes:
+        # 将股票代码按批次拆分，避免参数过长
+        code_batches = [
+            stock_codes[i:i + BATCH_SIZE]
+            for i in range(0, len(stock_codes), BATCH_SIZE)
+        ]
+
+        for batch_idx, code_batch in enumerate(code_batches):
             try:
-                # 拉取单股票单日数据
-                raw_df = data_fetcher.fetch_kline_day(ts_code, trade_date, trade_date)
+                # 拼接多股票代码（格式：000001.sz,000002.sz,...）
+                ts_code_str = ",".join(code_batch)
+                # 批量拉取该日期下这批股票的日线数据
+                raw_df = data_fetcher.fetch_kline_day(
+                    ts_code=ts_code_str,  # 多股票拼接字符串
+                    start_date=trade_date,
+                    end_date=trade_date
+                )
+
                 if raw_df.empty:
+                    logger.debug(f"{trade_date} 第{batch_idx+1}批（{len(code_batch)}只股票）无数据")
                     continue
-                # 清洗+入库
+
+                # 清洗数据（保持原有逻辑）
                 clean_df = cleaner._clean_kline_day_data(raw_df)
                 if clean_df.empty:
                     continue
+
+                # 批量入库（保持原有逻辑）
                 affected = db.batch_insert_df(clean_df, "kline_day", ignore_duplicate=True)
                 daily_affected += affected
+                logger.debug(f"{trade_date} 第{batch_idx+1}批更新完成，影响行数：{affected}")
+
             except Exception as e:
-                logger.error(f"{ts_code} {trade_date}更新失败：{e}")
+                batch_info = f"{trade_date} 第{batch_idx+1}批（{len(code_batch)}只股票）"
+                logger.error(f"{batch_info} 更新失败：{e}")
+                # 可选：批次失败后，尝试单个股票重试（兜底机制）
+                for ts_code in code_batch:
+                    try:
+                        raw_df_single = data_fetcher.fetch_kline_day(ts_code, trade_date, trade_date)
+                        if not raw_df_single.empty:
+                            clean_df_single = cleaner._clean_kline_day_data(raw_df_single)
+                            if not clean_df_single.empty:
+                                affected_single = db.batch_insert_df(clean_df_single, "kline_day", ignore_duplicate=True)
+                                daily_affected += affected_single
+                    except Exception as e_single:
+                        logger.error(f"{ts_code} {trade_date} 单股重试更新失败：{e_single}")
 
         logger.info(f"{trade_date}日线更新完成，影响行数：{daily_affected}")
         total_affected += daily_affected
 
     logger.info(f"日线增量更新完成，累计影响行数：{total_affected}")
     return True
-
 
 # -------------------------- 主执行流程 --------------------------
 def startUpdating():
@@ -77,10 +109,11 @@ def startUpdating():
     last_record = read_last_update_record()
     last_date = last_record["last_update_date"]
     logger.info(f"===== 上次更新时间：{last_date} =====")
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
     # 2. 计算增量日期
     inc_dates = calc_incremental_date_range(last_date, current_date)
+
 
     # 3. 执行更新
     updated_tables = []
@@ -97,8 +130,6 @@ def startUpdating():
 
 
 if __name__ == "__main__":
-    # 日志兜底配置（若未复用log_utils）
     if not logger.handlers:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     startUpdating()

@@ -57,7 +57,7 @@ class DBConnector:
                 cursorclass=pymysql.cursors.DictCursor, # 游标类型（返回字典格式，更易用）
                 connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT")) # 连接超时时间（秒）
             )
-            logger.info("数据库连接池初始化成功")
+            logger.debug("数据库连接池初始化成功")
         except Exception as e:
             # 初始化失败抛出明确异常，便于排查（如配置错误、网络不通、白名单问题）
             logger.critical(f"数据库连接池初始化失败：{str(e)}")
@@ -118,7 +118,7 @@ class DBConnector:
             conn, cursor = self.get_conn()          # 获取连接和游标
             cursor.execute(sql, params or ())       # 执行查询（参数化避免SQL注入）
             result = cursor.fetchall()              # 获取所有查询结果
-            logger.info(f"SQL查询执行成功，SQL：{sql}，参数：{params}，结果行数：{len(result) if result else 0}")
+            logger.debug(f"SQL查询执行成功，SQL：{sql}，参数：{params}，结果行数：{len(result) if result else 0}")
             if return_df:
                 return pd.DataFrame(result)         # 量化场景返回DataFrame更易用
             return result                           # 通用场景返回字典列表
@@ -177,7 +177,7 @@ class DBConnector:
             result = self.query(sql, (os.getenv("DB_NAME", "a_quant"), table_name))
             if result:
                 columns = [row["COLUMN_NAME"] for row in result]
-                logger.info(f"获取表{table_name}字段成功：{columns}")
+                logger.debug(f"获取表{table_name}字段成功：{columns}")
                 return columns
             else:
                 logger.warning(f"表{table_name}不存在或无字段")
