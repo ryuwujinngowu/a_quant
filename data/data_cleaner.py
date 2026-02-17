@@ -11,9 +11,15 @@ class DataCleaner:
     """数据清洗+入库核心类（终极版：100%保障exchange非空）"""
 
     def _clean_special_fields(self, df: pd.DataFrame) -> pd.DataFrame:
-        """通用格式清洗（终极版：强制保障exchange字段存在且非空）"""
+        """通用格式清洗"""
         df_cleaned = df.copy()
-
+        # 定义需要重命名的关键字映射（可扩展其他关键字，如desc→desc1等）
+        reserved_field_mapping = {
+            "change": "change1",
+            "vol": "volume"
+        }
+        # 批量重命名字段
+        df_cleaned = df_cleaned.rename(columns=reserved_field_mapping)
 
         # # 1. 如果接口未返回exchange字段，手动添加
         # if "exchange" not in df_cleaned.columns:
@@ -35,13 +41,13 @@ class DataCleaner:
                     df_cleaned[field], format="%Y%m%d", errors="coerce"
                 ).dt.strftime("%Y-%m-%d")
 
-        # 股票代码格式校验+非空保障
-        if "ts_code" in df_cleaned.columns:
-            df_cleaned = df_cleaned[df_cleaned["ts_code"].str.match(r"^\d{6}\.(SH|SZ|BJ)$", na=False)]
-            df_cleaned["ts_code"] = df_cleaned["ts_code"].fillna("UNKNOWN")
-        else:
-            logger.warning("接口未返回ts_code字段，手动添加并赋值为UNKNOWN")
-            df_cleaned["ts_code"] = "UNKNOWN"
+        # # 股票代码格式校验+非空保障
+        # if "ts_code" in df_cleaned.columns:
+        #     df_cleaned = df_cleaned[df_cleaned["ts_code"].str.match(r"^\d{6}\.(SH|SZ|BJ)$", na=False)]
+        #     df_cleaned["ts_code"] = df_cleaned["ts_code"].fillna("UNKNOWN")
+        # else:
+        #     logger.warning("接口未返回ts_code字段，手动添加并赋值为UNKNOWN")
+        #     df_cleaned["ts_code"] = "UNKNOWN"
         # 核心NOT NULL字段非空兜底
         not_null_fields = ["ts_code", "symbol", "name", "exchange", "list_date"]
         for field in not_null_fields:
@@ -74,12 +80,11 @@ class DataCleaner:
         return df_cleaned
 
 
-    def auto_add_missing_table_columns(
-            table_name: str,
-            missing_columns: list,
-            col_type_mapping: dict = None,
-            logger=None
-    ) -> bool:
+    def auto_add_missing_table_columns(self,
+       table_name: str,
+        missing_columns: list,
+        col_type_mapping: dict = None,
+        ) -> bool:
         """
         通用方法：自动为数据库表新增缺失字段（带默认值，避免插入NULL/NaN报错）
 
@@ -258,10 +263,10 @@ class DataCleaner:
         if missing_columns:
             logger.info(f"数据库表{table_name}缺失字段：{missing_columns}，开始自动新增")
 
-            stockbase_col_mapping = {
-                # 如需覆盖通用映射，在此补充（示例：调整name字段长度）
-                "name": "VARCHAR(64) NOT NULL DEFAULT 'UNKNOWN'"
-            }
+            # stockbase_col_mapping = {
+            #     # 如需覆盖通用映射，在此补充（示例：调整name字段长度）
+            #     "name": "VARCHAR(64) NOT NULL DEFAULT 'UNKNOWN'"
+            # }
             # 调用通用方法
             add_success = db.auto_add_missing_table_columns(
                 table_name=table_name,
@@ -488,6 +493,110 @@ class DataCleaner:
 
         return total_ingest_rows
 
+    # ========== 新增：指数日线数据清洗+入库方法 ==========
+    def clean_and_insert_index_daily(
+            self,
+            ts_code: Optional[str] = None,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            table_name: str = "index_daily"
+    ) -> Optional[int]:
+        """
+        指数日线数据清洗并入库到index_daily表
+        步骤：1. 获取数据 → 2. 数据清洗 → 3. 批量入库
+
+        Args:
+            ts_code: 指数代码（单个/多个，如"000001.SH"或"000001.SH,399001.SZ"）
+            trade_date: 单个交易日期（格式YYYYMMDD）
+            start_date: 开始日期（格式YYYYMMDD）
+            end_date: 结束日期（格式YYYYMMDD）
+            table_name: 目标表名（默认index_daily）
+
+        Returns:
+            int: 入库影响行数；失败返回None
+        """
+        logger.info(f"===== 开始清洗并入库指数日线数据（目标表：{table_name}） =====")
+
+        # 1. 获取指数日线原始数据
+        logger.debug(
+            f"获取指数日线数据，参数：ts_code={ts_code}, trade_date={trade_date}, start_date={start_date}, end_date={end_date}")
+        raw_df = data_fetcher.fetch_index_daily(
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        if raw_df.empty:
+            logger.debug("指数日线原始数据为空，跳过入库")
+            return 0
+
+        # 2. 数据清洗（核心步骤，适配index_daily表字段）
+        clean_df = self._clean_special_fields(raw_df.copy())
+        if clean_df.empty:
+            logger.warning("指数日线数据清洗后为空，跳过入库")
+            return 0
+
+        # 4. 批量入库
+        try:
+            affected_rows = db.batch_insert_df(
+                df=clean_df,
+                table_name=table_name,
+                ignore_duplicate=True  # 忽略重复数据（基于ts_code+trade_date唯一索引）
+            )
+            logger.info(f"指数日线数据入库完成，影响行数：{affected_rows}，入库字段数：{len(clean_df.columns)}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"指数日线数据入库失败，错误信息：{str(e)}")
+            return None
+
+    # def _clean_index_daily_data(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+    #     """
+    #     指数日线数据清洗私有方法（内部调用）
+    #     处理逻辑：
+    #     1. 替换NaN/inf为0（避免MySQL入库报错）
+    #     2. 字段类型转换（数值字段转float/int，日期字段格式化）
+    #     3. 去重（基于ts_code+trade_date）
+    #     4. 字段格式校验（如ts_code格式、日期格式）
+    #     """
+    #     if raw_df.empty:
+    #         return pd.DataFrame()
+    #
+    #     logger.debug(f"开始清洗指数日线数据，原始行数：{len(raw_df)}")
+    #
+    #     # 步骤1：替换缺失值和异常值
+    #     raw_df = raw_df.replace([np.nan, np.inf, -np.inf], 0)
+    #
+    #     # 步骤2：字段类型转换（适配index_daily表字段类型）
+    #     type_mapping = {
+    #         "open": float,
+    #         "high": float,
+    #         "low": float,
+    #         "close": float,
+    #         "pre_close": float,
+    #         "change1": float,
+    #         "pct_chg": float,
+    #         "vol": int,  # 成交量（手）转整型
+    #         "amount": float  # 成交额（万元）转浮点型
+    #     }
+    #     for col, dtype in type_mapping.items():
+    #         if col in raw_df.columns:
+    #             raw_df[col] = raw_df[col].astype(dtype, errors="ignore")
+    #
+    #     # 步骤3：日期字段格式化（确保为YYYY-MM-DD，适配MySQL DATE类型）
+    #     if "trade_date" in raw_df.columns:
+    #         # 先转为字符串，再替换格式（YYYYMMDD → YYYY-MM-DD）
+    #         raw_df["trade_date"] = raw_df["trade_date"].astype(str).str.replace(r"(\d{4})(\d{2})(\d{2})",
+    #                                                                             r"\1-\2-\3", regex=True)
+    #         # 过滤无效日期（如长度≠10的）
+    #         raw_df = raw_df[raw_df["trade_date"].str.len() == 10]
+    #
+    #     # 步骤5：去重（基于ts_code+trade_date，避免重复数据）
+    #     raw_df = raw_df.drop_duplicates(subset=["ts_code", "trade_date"], keep="last")
+    #
+    #     logger.debug(f"指数日线数据清洗完成，清洗后行数：{len(raw_df)}")
+    #     return raw_df
 
 
 # 全局实例
@@ -506,20 +615,23 @@ if __name__ == "__main__":
     # kline_affected_rows = data_cleaner.clean_and_insert_kline_day(table_name="kline_day")
     # logger.info(f"全市场日K数据入库完成，累计入库/更新行数：{kline_affected_rows}")
 
-    # 方式2：单股票测试（调试用，注释掉方式1后打开）
-    def test_single_kline_code():
-        """单股票日K数据测试"""
-        test_code = "000002.SZ"
-        raw_df = data_fetcher.fetch_kline_day(
-            ts_code=test_code,
-            start_date="20090215",
-            end_date="20260215"
+    """测试指数日线数据清洗入库"""
+    try:
+    #     # 测试1：单指数单日数据入库
+    #     affected = data_cleaner.clean_and_insert_index_daily(
+    #         ts_code="000001.SH",
+    #         trade_date="20241231"
+    #     )
+    #     logger.info(f"单指数单日入库影响行数：{affected}")
+
+        # 测试2：多指数日期范围数据入库
+        affected_multi = data_cleaner.clean_and_insert_index_daily(
+            ts_code="399107.SZ",
+            start_date="20090101",
+            end_date="20260213"
         )
-        cleaned_df = data_cleaner._clean_kline_day_data(raw_df)
-        affected_rows = db.batch_insert_df(
-            df=cleaned_df,
-            table_name="kline_day",
-            ignore_duplicate=True
-        )
-        logger.info(f"{test_code} 日K测试入库完成，影响行数：{affected_rows}")
-    test_single_kline_code()
+        logger.info(f"多指数日期范围入库影响行数：{affected_multi}")
+
+        logger.info("===== 指数日线数据清洗入库测试完成 ✅ =====")
+    except Exception as e:
+        logger.error(f"指数日线数据清洗入库测试失败：{str(e)} ❌")

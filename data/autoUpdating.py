@@ -101,6 +101,22 @@ def update_kline_day_incremental(date_list: list):
     logger.info(f"日线增量更新完成，累计影响行数：{total_affected}")
     return True
 
+def update_index_daily(last_date):
+    """更新指数信息表"""
+    logger.info("===== 更新index_daily表 =====")
+    try:
+        for i in '000001.SH','399001.SZ','399006.SZ',"399107.SZ":
+            affected_multi = cleaner.clean_and_insert_index_daily(
+            ts_code = i,
+            start_date = last_date.replace('-',''),
+            end_date = datetime.datetime.now().strftime("%Y%m%d")
+            )
+            logger.info(f"已更新{i}指数信息到今日，index_daily表")
+        return True
+    except Exception as e:
+        logger.error(f"更新index_daily表失败：{e}", exc_info=True)
+        return False
+
 # -------------------------- 主执行流程 --------------------------
 def startUpdating():
     logger.info("===== 启动增量更新脚本 =====")
@@ -121,6 +137,8 @@ def startUpdating():
         updated_tables.append("stock_basic")
     if update_kline_day_incremental(inc_dates):
         updated_tables.append("kline_day")
+    if update_index_daily(last_date):
+        updated_tables.append("index_daily")
 
     # 4. 记录本次更新
     write_update_record(current_date, updated_tables)
