@@ -597,6 +597,183 @@ class DataCleaner:
     #
     #     logger.debug(f"指数日线数据清洗完成，清洗后行数：{len(raw_df)}")
     #     return raw_df
+    def _clean_kline_min_data(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """分钟线数据清洗私有方法（适配新表结构）"""
+        if raw_df.empty:
+            return pd.DataFrame()
+
+        df_clean = raw_df.copy()
+        # 1. 核心适配：接口返回vol → 数据库字段volume，对齐kline_day命名
+        if "vol" in df_clean.columns:
+            df_clean = df_clean.rename(columns={"vol": "volume"})
+
+        # 2. 替换NaN/inf，避免MySQL入库报错（和日线清洗逻辑一致）
+        df_clean = df_clean.replace([np.nan, np.inf, -np.inf], 0)
+
+        # 3. 字段类型转换，匹配表结构（和日线清洗逻辑对齐）
+        type_mapping = {
+            "open": float,
+            "close": float,
+            "high": float,
+            "low": float,
+            "volume": int,
+            "amount": float
+        }
+        for col, dtype in type_mapping.items():
+            if col in df_clean.columns:
+                df_clean[col] = df_clean[col].astype(dtype, errors="ignore")
+
+        # 4. 格式化时间字段，适配MySQL
+        if "trade_time" in df_clean.columns:
+            df_clean["trade_time"] = pd.to_datetime(df_clean["trade_time"], errors="coerce")
+            df_clean = df_clean.dropna(subset=["trade_time"])
+            # 提取trade_date，和kline_day对齐
+            df_clean["trade_date"] = df_clean["trade_time"].dt.date
+
+        # 5. 去重，和主键逻辑一致
+        df_clean = df_clean.drop_duplicates(subset=["ts_code", "trade_time"], keep="last")
+
+        logger.debug(f"分钟线数据清洗完成，原始行数：{len(raw_df)}，清洗后：{len(df_clean)}")
+        return df_clean
+
+    def clean_and_insert_kline_min(self, raw_df: pd.DataFrame, table_name: str = "kline_min") -> Optional[int]:
+        """分钟线数据清洗并批量入库（适配新表结构）"""
+        if raw_df.empty:
+            return 0
+
+        clean_df = self._clean_kline_min_data(raw_df)
+        if clean_df.empty:
+            return 0
+
+        # 过滤数据库表中存在的字段，避免插入报错（和日线逻辑一致）
+        db_columns = db.get_table_columns(table_name)
+        exclude_columns = ["id", "created_at", "updated_at"]
+        db_columns = [col for col in db_columns if col not in exclude_columns]
+        final_df = clean_df[[col for col in clean_df.columns if col in db_columns]]
+
+        # 批量入库，忽略重复数据（和主键逻辑匹配）
+        try:
+            affected_rows = db.batch_insert_df(
+                df=final_df,
+                table_name=table_name,
+                ignore_duplicate=True
+            )
+            logger.debug(f"分钟线数据入库完成，影响行数：{affected_rows}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"分钟线数据入库失败：{str(e)}")
+            return None
+
+    def get_kline_min_by_stock_date(self, ts_code: str, trade_date: str, table_name: str = "kline_min") -> pd.DataFrame:
+        """查询指定股票、指定日期的分钟线数据（按时间升序，适配新表结构）"""
+        sql = f"""
+            SELECT ts_code, trade_time, trade_date, open, close, high, low, volume, amount
+            FROM {table_name}
+            WHERE ts_code = %s AND trade_date = %s
+            ORDER BY trade_time ASC
+        """
+        df = db.query(sql, params=(ts_code, trade_date), return_df=True)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        # 格式化时间字段，用于涨停时间计算
+        df["trade_time"] = pd.to_datetime(df["trade_time"])
+        return df
+
+    def truncate_kline_min_table(self, table_name: str = "kline_min"):
+        """清空分钟线临时表（回测前后调用，避免数据堆积）"""
+        try:
+            sql = f"TRUNCATE TABLE {table_name}"
+            db.execute(sql)
+            logger.info(f"分钟线临时表{table_name}清空完成")
+        except Exception as e:
+            logger.error(f"分钟线临时表清空失败：{str(e)}")
+
+    # ========== 原有代码保留，新增以下方法 ==========
+    def _clean_trade_cal_data(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """交易日历数据清洗私有方法"""
+        if raw_df.empty:
+            return pd.DataFrame()
+
+        df_clean = raw_df.copy()
+        # 1. 日期格式化，适配数据库DATE类型
+        date_fields = ["cal_date", "pretrade_date"]
+        for field in date_fields:
+            if field in df_clean.columns:
+                df_clean[field] = pd.to_datetime(df_clean[field], errors="coerce").dt.date
+                df_clean = df_clean.dropna(subset=[field])
+        # 2. is_open转为整型，适配数据库TINYINT
+        if "is_open" in df_clean.columns:
+            df_clean["is_open"] = pd.to_numeric(df_clean["is_open"], errors="coerce").fillna(0).astype(int)
+        # 3. 去重，匹配主键逻辑
+        df_clean = df_clean.drop_duplicates(subset=["exchange", "cal_date"], keep="last")
+
+        logger.debug(f"交易日历数据清洗完成，原始行数：{len(raw_df)}，清洗后：{len(df_clean)}")
+        return df_clean
+
+    def clean_and_insert_trade_cal(self, raw_df: pd.DataFrame, table_name: str = "trade_cal") -> Optional[int]:
+        """交易日历数据清洗并批量入库"""
+        if raw_df.empty:
+            return 0
+
+        clean_df = self._clean_trade_cal_data(raw_df)
+        if clean_df.empty:
+            return 0
+
+        # 过滤数据库表字段，避免插入报错
+        db_columns = db.get_table_columns(table_name)
+        exclude_columns = ["created_at"]
+        db_columns = [col for col in db_columns if col not in exclude_columns]
+        final_df = clean_df[[col for col in clean_df.columns if col in db_columns]]
+
+        # 批量入库
+        try:
+            affected_rows = db.batch_insert_df(
+                df=final_df,
+                table_name=table_name,
+                ignore_duplicate=True
+            )
+            logger.debug(f"交易日历数据入库完成，影响行数：{affected_rows}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"交易日历数据入库失败：{str(e)}")
+            return None
+
+    def get_trade_dates(self, start_date: str, end_date: str, table_name: str = "trade_cal") -> list:
+        """获取指定时间段内的交易日列表（仅is_open=1），按日期升序"""
+        sql = f"""
+            SELECT cal_date
+            FROM {table_name}
+            WHERE cal_date BETWEEN %s AND %s
+            AND is_open = 1
+            ORDER BY cal_date ASC
+        """
+        df = db.query(sql, params=(start_date, end_date), return_df=True)
+        if df is None or df.empty:
+            logger.warning(f"未查询到{start_date}至{end_date}的交易日数据")
+            return []
+        # 转为YYYY-MM-DD格式的字符串列表
+        return df["cal_date"].astype(str).tolist()
+
+    def get_pre_trade_date(self, current_date: str, table_name: str = "trade_cal") -> Optional[str]:
+        """获取指定日期的上一个交易日，用于前收盘价查询"""
+        sql = f"""
+            SELECT pretrade_date
+            FROM {table_name}
+            WHERE cal_date = %s
+        """
+        df = db.query(sql, params=(current_date,), return_df=True)
+        if df is None or df.empty or pd.isna(df["pretrade_date"].iloc[0]):
+            return None
+        return df["pretrade_date"].iloc[0].strftime("%Y-%m-%d")
+
+    def truncate_trade_cal_table(self, table_name: str = "trade_cal"):
+        """清空交易日历临时表（回测结束调用）"""
+        try:
+            sql = f"TRUNCATE TABLE {table_name}"
+            db.execute(sql)
+            logger.info(f"交易日历临时表{table_name}清空完成")
+        except Exception as e:
+            logger.error(f"交易日历临时表清空失败：{str(e)}")
 
 
 # 全局实例

@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import  time
 import tushare as ts
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
@@ -252,6 +253,92 @@ class DataFetcher:
     # ===================== 新增结束 =====================
     # 其他预留函数（get_trade_calendar/get_kline_day等）保持不变...
 
+
+
+
+    def fetch_stk_mins(
+            self,
+            ts_code: str,
+            freq: str = "1min",
+            start_date: str = None,
+            end_date: str = None
+    ) -> pd.DataFrame:
+        """
+        获取A股股票分钟线数据（对接Tushare stk_mins接口，doc_id=370）
+        :param ts_code: 股票代码（如600000.SH）
+        :param freq: 分钟频度（1min/5min/15min/30min/60min），默认1min
+        :param start_date: 开始时间（格式：2023-08-25 09:00:00）
+        :param end_date: 结束时间（格式：2023-08-25 15:00:00）
+        :return: 分钟线DataFrame，空数据返回空DataFrame
+        """
+        params = {
+            "ts_code": ts_code,
+            "freq": freq,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+        # 过滤空参数，避免接口报错
+        params = {k: v for k, v in params.items() if v is not None and v != ""}
+
+        try:
+            logger.debug(f"开始获取{ts_code}分钟线数据，参数：{params}")
+            # 接口限流，避免触发Tushare频率限制
+            time.sleep(0.2)
+            df = self.pro.stk_mins(**params)
+
+            if df.empty:
+                logger.warning(f"{ts_code}分钟线数据为空，参数：{params}")
+                return pd.DataFrame()
+
+            logger.debug(f"{ts_code}分钟线数据获取完成，行数：{len(df)}")
+            return df
+        except Exception as e:
+            logger.error(f"{ts_code}分钟线数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+    # ========== 原有代码保留，新增以下方法 ==========
+    def fetch_trade_cal(
+            self,
+            start_date: str,
+            end_date: str,
+            exchange: str = "SSE",
+            is_open: int = None
+    ) -> pd.DataFrame:
+        """
+        获取A股交易日历数据（对接Tushare trade_cal接口，doc_id=26）
+        :param start_date: 开始日期（格式：YYYY-MM-DD 或 YYYYMMDD）
+        :param end_date: 结束日期（格式：YYYY-MM-DD 或 YYYYMMDD）
+        :param exchange: 交易所，默认SSE上交所（A股沪深交易日历一致）
+        :param is_open: 是否交易，1=仅交易日，0=仅休市日，不传返回全部
+        :return: 交易日历DataFrame，空数据返回空DataFrame
+        """
+        # 格式化日期，适配接口要求的YYYYMMDD格式
+        start_date_format = start_date.replace("-", "")
+        end_date_format = end_date.replace("-", "")
+
+        params = {
+            "exchange": exchange,
+            "start_date": start_date_format,
+            "end_date": end_date_format
+        }
+        # 可选参数：是否过滤交易日
+        if is_open is not None:
+            params["is_open"] = str(is_open)
+
+        try:
+            logger.debug(f"开始获取交易日历数据，参数：{params}")
+            time.sleep(0.2)  # 接口限流
+            df = self.pro.trade_cal(**params)
+
+            if df.empty:
+                logger.warning(f"交易日历数据为空，参数：{params}")
+                return pd.DataFrame()
+
+            logger.debug(f"交易日历数据获取完成，行数：{len(df)}")
+            return df
+        except Exception as e:
+            logger.error(f"交易日历数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
 
 # 全局实例
 data_fetcher = DataFetcher()
