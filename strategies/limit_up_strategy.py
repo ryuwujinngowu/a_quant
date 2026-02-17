@@ -1,7 +1,8 @@
 import pandas as pd
+
 from strategies.base_strategy import BaseStrategy
-from config.config import DAILY_LIMIT_UP_RATE
 from utils.log_utils import logger
+
 
 class LimitUpHoldStrategy(BaseStrategy):
     """

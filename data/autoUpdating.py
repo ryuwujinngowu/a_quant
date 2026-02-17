@@ -4,17 +4,18 @@
 自动化增量更新脚本
 核心：更新stock_basic全量数据 + 日线增量数据
 """
-import logging
 import datetime
-from utils.log_utils import logger
-from utils.db_utils import db
+import logging
+
+from data.data_cleaner import DataCleaner
+from data.data_fetcher import data_fetcher
 from utils.common_tools import (
     read_last_update_record,
     write_update_record,
     calc_incremental_date_range
 )
-from data.data_fetcher import data_fetcher
-from data.data_cleaner import DataCleaner
+from utils.db_utils import db
+from utils.log_utils import logger
 
 # 初始化核心组件
 cleaner = DataCleaner()

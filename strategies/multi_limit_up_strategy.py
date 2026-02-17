@@ -1,11 +1,12 @@
-import pandas as pd
 from datetime import datetime
-from strategies.base_strategy import BaseStrategy
-from config.config import DAILY_LIMIT_UP_RATE
+
+import pandas as pd
+
 from config.config import MAIN_BOARD_LIMIT_UP_RATE, STAR_BOARD_LIMIT_UP_RATE
-from utils.log_utils import logger
-from data.data_fetcher import data_fetcher
 from data.data_cleaner import data_cleaner
+from data.data_fetcher import data_fetcher
+from strategies.base_strategy import BaseStrategy
+from utils.log_utils import logger
 
 
 class MultiLimitUpStrategy(BaseStrategy):
@@ -203,7 +204,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             close_price = stock_df["close"].iloc[0]
             pre_close = stock_df["pre_close"].iloc[0]
             # 判断当日是否涨停
-            is_limit_up = close_price >= self.calc_limit_up_price(pre_close) * 0.995
+            is_limit_up = close_price >= self.calc_limit_up_price(ts_code, pre_close) * 0.995
 
             # 卖出规则1：买入当日（hold_days=0）收盘未涨停，次日开盘卖
             if position.hold_days == 0:

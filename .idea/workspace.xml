@@ -4,19 +4,26 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e2c1f11e-9780-4fce-acdf-c7fa40e7f7f6" name="更改" comment="Update stock_basic and kline_day data fetching and logging levels">
-      <change afterPath="$PROJECT_DIR$/backtest/account.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/backtest/metrics.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/config/config.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/features/technical.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/strategies/base_strategy.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/strategies/limit_up_strategy.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/strategies/multi_limit_up_strategy.py" afterDir="false" />
+    <list default="true" id="e2c1f11e-9780-4fce-acdf-c7fa40e7f7f6" name="更改" comment="Add backtest metrics, multi-limit up strategy, and technical features&#10;&#10;- Add `BacktestMetrics` class for calculating backtest metrics&#10;- Implement `MultiLimitUpStrategy` for selecting and trading stocks based on limit-up rules&#10;- Add technical feature calculations including limit-up and moving average features&#10;- Update `data_fetcher` to include minute data and trade calendar fetching&#10;- Initialize backtest engine with support for multiple stocks and trade dates">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backtest/account.py" beforeDir="false" afterPath="$PROJECT_DIR$/backtest/account.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backtest/engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/backtest/engine.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backtest/metrics.py" beforeDir="false" afterPath="$PROJECT_DIR$/backtest/metrics.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backtest/utils_forBackTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/backtest/utils_forBackTest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/autoUpdating.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/autoUpdating.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/bac.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/bac.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/data/data_cleaner.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/data_cleaner.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/data/data_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/data_fetcher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data_realtime/data_realtmeFetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/data_realtime/data_realtmeFetcher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/features/technical.py" beforeDir="false" afterPath="$PROJECT_DIR$/features/technical.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/strategies/base_strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies/base_strategy.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/strategies/limit_up_strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies/limit_up_strategy.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/strategies/multi_limit_up_strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies/multi_limit_up_strategy.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils/common_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/common_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils/db_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/db_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils/log_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/log_utils.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -262,7 +269,7 @@
       <workItem from="1771155029177" duration="7786000" />
       <workItem from="1771168063830" duration="26299000" />
       <workItem from="1771242941115" duration="7491000" />
-      <workItem from="1771321231771" duration="895000" />
+      <workItem from="1771321231771" duration="6148000" />
     </task>
     <task id="LOCAL-00001" summary="v1.0">
       <option name="closed" value="true" />
@@ -320,37 +327,23 @@
       <option name="project" value="LOCAL" />
       <updated>1771301306599</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Add backtest metrics, multi-limit up strategy, and technical features&#10;&#10;- Add `BacktestMetrics` class for calculating backtest metrics&#10;- Implement `MultiLimitUpStrategy` for selecting and trading stocks based on limit-up rules&#10;- Add technical feature calculations including limit-up and moving average features&#10;- Update `data_fetcher` to include minute data and trade calendar fetching&#10;- Initialize backtest engine with support for multiple stocks and trade dates">
+      <option name="closed" value="true" />
+      <created>1771322170518</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1771322170519</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
-    <option name="OPEN_GENERIC_TABS">
-      <map>
-        <entry key="96f6f6aa-d786-4bf5-8dfd-2881097bf381" value="TOOL_WINDOW" />
-      </map>
-    </option>
     <option name="TAB_STATES">
       <map>
-        <entry key="96f6f6aa-d786-4bf5-8dfd-2881097bf381">
-          <value>
-            <State>
-              <option name="FILTERS">
-                <map>
-                  <entry key="branch">
-                    <value>
-                      <list>
-                        <option value="master" />
-                      </list>
-                    </value>
-                  </entry>
-                </map>
-              </option>
-            </State>
-          </value>
-        </entry>
         <entry key="MAIN">
           <value>
             <State>
@@ -379,7 +372,8 @@
     <MESSAGE value="Add auto-updating script for stock_basic and kline_day data" />
     <MESSAGE value="1.3、Add auto-updating script for stock_basic and kline_day data&#10;" />
     <MESSAGE value="Update stock_basic and kline_day data fetching and logging levels" />
-    <option name="LAST_COMMIT_MESSAGE" value="Update stock_basic and kline_day data fetching and logging levels" />
+    <MESSAGE value="Add backtest metrics, multi-limit up strategy, and technical features&#10;&#10;- Add `BacktestMetrics` class for calculating backtest metrics&#10;- Implement `MultiLimitUpStrategy` for selecting and trading stocks based on limit-up rules&#10;- Add technical feature calculations including limit-up and moving average features&#10;- Update `data_fetcher` to include minute data and trade calendar fetching&#10;- Initialize backtest engine with support for multiple stocks and trade dates" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add backtest metrics, multi-limit up strategy, and technical features&#10;&#10;- Add `BacktestMetrics` class for calculating backtest metrics&#10;- Implement `MultiLimitUpStrategy` for selecting and trading stocks based on limit-up rules&#10;- Add technical feature calculations including limit-up and moving average features&#10;- Update `data_fetcher` to include minute data and trade calendar fetching&#10;- Initialize backtest engine with support for multiple stocks and trade dates" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/a_quant$data_realtmeFetcher.coverage" NAME="data_realtmeFetcher 覆盖结果" MODIFIED="1771249758528" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/data_realtime" />
@@ -388,6 +382,6 @@
     <SUITE FILE_PATH="coverage/a_quant$multi_limit_up_strategy.coverage" NAME="multi_limit_up_strategy 覆盖结果" MODIFIED="1771321201211" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/strategies" />
     <SUITE FILE_PATH="coverage/a_quant$bac.coverage" NAME="bac 覆盖结果" MODIFIED="1771162487862" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/data" />
     <SUITE FILE_PATH="coverage/a_quant$autoUpdating.coverage" NAME="autoUpdating 覆盖结果" MODIFIED="1771309120264" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/data" />
-    <SUITE FILE_PATH="coverage/a_quant$main.coverage" NAME="main 覆盖结果" MODIFIED="1771321518161" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/a_quant$main.coverage" NAME="main 覆盖结果" MODIFIED="1771327257886" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

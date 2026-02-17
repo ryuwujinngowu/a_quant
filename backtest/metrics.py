@@ -1,7 +1,8 @@
-import pandas as pd
 import numpy as np
-from utils.log_utils import logger
+import pandas as pd
+
 from config.config import ANNUAL_TRADE_DAYS, RISK_FREE_RATE
+from utils.log_utils import logger
 
 
 class BacktestMetrics:

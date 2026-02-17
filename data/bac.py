@@ -1,11 +1,12 @@
-import pandas as pd
-import numpy as np
-from typing import Optional, Dict, List
+from typing import Optional
 
-from utils.log_utils import logger
-from utils.db_utils import db
-from utils.common_tools import calc_15_years_date_range, escape_mysql_reserved_words
+import numpy as np
+import pandas as pd
+
 from data.data_fetcher import data_fetcher
+from utils.common_tools import calc_15_years_date_range
+from utils.db_utils import db
+from utils.log_utils import logger
 
 
 class DataCleaner:

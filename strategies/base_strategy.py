@@ -1,6 +1,7 @@
-import pandas as pd
 from abc import ABC, abstractmethod
-from utils.log_utils import logger
+
+import pandas as pd
+
 
 class BaseStrategy(ABC):
     """

@@ -1,21 +1,24 @@
 import os
+import time
+from typing import Optional, Dict, Any
+
 import pandas as pd
-import  time
 import tushare as ts
-from typing import Optional, Dict, Any, List
-from dotenv import load_dotenv
 
 from utils.log_utils import logger
+
 
 def initialize_tushare():
     # 初始化配置
     CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env")
-    load_dotenv(CONFIG_PATH)
+    # load_dotenv(CONFIG_PATH)
     TS_TOKEN = os.getenv("TS_TOKEN", "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3")
+    # pro = ts.pro_api('c85afd3ab0ea551098bd6a0fbac1a19540b3e8ff279d07b1a340124d')  # 你的独立Token，请勿泄露
     try:
         ts.set_token(TS_TOKEN)
         pro = ts.pro_api()
-        pro._DataApi__http_url = 'http://106.54.191.157:5000'   # 淘宝token专属配置，保留
+        # pro._DataApi__http_url = 'http://106.54.191.157:5000'   # 淘宝token专属配置，保留
+        pro._DataApi__http_url = 'http://tushare.xyz'
         logger.info("Tushare Pro API 初始化成功")
     except Exception as e:
         logger.critical(f"Tushare Pro API 初始化失败：{str(e)}")

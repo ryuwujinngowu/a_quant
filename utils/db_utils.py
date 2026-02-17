@@ -1,9 +1,11 @@
 import os
-import pymysql
-import pandas as pd
-from dotenv import load_dotenv
 from typing import Optional, List, Dict, Tuple, Union
+
+import pandas as pd
+import pymysql
 from dbutils.pooled_db import PooledDB
+from dotenv import load_dotenv
+
 # 新增：导入日志器
 from utils.log_utils import logger
 
@@ -299,7 +301,8 @@ class DBConnector:
                     cursor.executemany(sql, data)
                     affected_rows = cursor.rowcount
                     conn.commit()
-                    self.logger.info(f"DataFrame批量插入成功：表名 {table_name}，影响行数 {affected_rows}")
+                    self.logger.info(f"DataFrame批量插入成功：表名 {table_name}，影响行数 {affected_rows}，sql{sql}")
+
                     return affected_rows
 
         except Exception as e:

@@ -3,10 +3,10 @@
 """
 主入口：全市场分仓涨停策略回测
 """
-from utils.log_utils import logger
+from backtest.engine import MultiStockBacktestEngine
 from config.config import DEFAULT_INIT_CAPITAL
 from strategies.multi_limit_up_strategy import MultiLimitUpStrategy
-from backtest.engine import MultiStockBacktestEngine
+
 
 def main():
     # ===================== 回测参数配置 =====================

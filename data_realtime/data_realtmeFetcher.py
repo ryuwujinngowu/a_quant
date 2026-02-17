@@ -1,9 +1,5 @@
-import os
 import pandas as pd
 import tushare as ts
-from typing import Optional, Dict, Any, List
-from dotenv import load_dotenv
-from utils.log_utils import logger
 
 ts.set_token('6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3')
 pd.set_option('display.max_rows', None)
