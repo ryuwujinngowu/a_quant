@@ -301,7 +301,7 @@ class DBConnector:
                     cursor.executemany(sql, data)
                     affected_rows = cursor.rowcount
                     conn.commit()
-                    self.logger.info(f"DataFrame批量插入成功：表名 {table_name}，影响行数 {affected_rows}，sql{sql}")
+                    self.logger.debug(f"DataFrame批量插入成功：表名 {table_name}，影响行数 {affected_rows}，sql{sql}")
 
                     return affected_rows
 

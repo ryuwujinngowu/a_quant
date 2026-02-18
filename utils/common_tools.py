@@ -3,7 +3,8 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
-
+from typing import List, Dict, Optional
+from utils.db_utils import db  # 确保db工具已导入
 from utils.log_utils import logger
 
 # 增量更新配置（可统一维护）
@@ -92,3 +93,52 @@ def escape_mysql_reserved_words(field_name: str) -> str:
     if field_name.lower() in reserved_words:
         return f"`{field_name}`"
     return field_name
+
+
+
+
+def auto_add_missing_table_columns(
+    table_name: str,
+    missing_columns: List[str],
+    col_type_mapping: Dict[str, str] = None
+) -> bool:
+    """
+    通用方法：自动为数据库表新增缺失字段（带默认值，避免插入NULL/NaN报错）
+    迁移说明：从DataCleaner类迁移为通用函数，核心逻辑完全不变
+    """
+    # 默认字段类型映射（金融数据标准化规则）
+    default_col_type_mapping = {
+        # 日期类字段
+        "list_date": "DATE NOT NULL DEFAULT '1970-01-01'",
+        "delist_date": "DATE DEFAULT NULL",
+        # 数值类字段
+        "total_share": "BIGINT DEFAULT 0",
+        "float_share": "BIGINT DEFAULT 0",
+        "free_share": "BIGINT DEFAULT 0",
+        "total_mv": "DECIMAL(20,2) DEFAULT 0.00",
+        "circ_mv": "DECIMAL(20,2) DEFAULT 0.00",
+        # 核心字符串字段
+        "exchange": "VARCHAR(8) NOT NULL DEFAULT 'UNKNOWN'",
+        "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
+        "symbol": "VARCHAR(6) NOT NULL DEFAULT 'UNKNOWN'",
+        "name": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'",
+        # 兜底类型
+        "default": "VARCHAR(255) NOT NULL DEFAULT ''"
+    }
+
+    # 合并默认映射和自定义映射（自定义优先级更高）
+    final_col_map = default_col_type_mapping.copy()
+    if col_type_mapping:
+        final_col_map.update(col_type_mapping)
+
+    success = True
+    for col in missing_columns:
+        try:
+            col_type = final_col_map.get(col, final_col_map["default"])
+            db.add_table_column(table_name, col, col_type)
+            logger.info(f"表{table_name}新增字段{col}成功（类型：{col_type}）")
+        except Exception as e:
+            success = False
+            logger.error(f"表{table_name}新增字段{col}失败：{e}")
+
+    return success
