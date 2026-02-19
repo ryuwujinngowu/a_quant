@@ -6,6 +6,7 @@
 """
 import datetime
 import logging
+import time
 
 from data.data_cleaner import DataCleaner
 from data.data_fetcher import data_fetcher
@@ -107,7 +108,8 @@ def update_index_daily(last_date):
     logger.info("===== 更新index_daily表 =====")
     try:
         for i in '000001.SH','399001.SZ','399006.SZ',"399107.SZ":
-            affected_multi = cleaner.clean_and_insert_index_daily(
+
+            cleaner.clean_and_insert_index_daily(
             ts_code = i,
             start_date = last_date.replace('-',''),
             end_date = datetime.datetime.now().strftime("%Y%m%d")

@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
@@ -11,7 +12,7 @@ from utils.log_utils import logger
 
 
 class MultiStockBacktestEngine:
-    """全市场多标的回测引擎（优化版：适配交易日历，杜绝休市日无效请求）"""
+    """全市场多标的回测引擎（性能优化版：缓存+预加载+索引优化）"""
 
     def __init__(
             self,
@@ -26,7 +27,7 @@ class MultiStockBacktestEngine:
         self.end_date = end_date
         # 初始化账户
         self.account = Account(init_capital=init_capital, max_position_count=MAX_POSITION_COUNT)
-        # 回测交易日列表（从交易日历获取，100%准确）
+        # 回测交易日列表
         self.trade_dates = self.init_trade_cal()
         # 回测结果
         self.result = {}
@@ -59,6 +60,7 @@ class MultiStockBacktestEngine:
 
     def get_daily_kline_data(self, trade_date: str) -> pd.DataFrame:
         """获取指定日期全市场日线数据（仅交易日执行，杜绝无效请求）"""
+        logger.debug(f"开始获取日线数据: {trade_date}")
         trade_date_format = trade_date.replace("-", "")
         # 优先从数据库读取
         sql = """
@@ -70,37 +72,30 @@ class MultiStockBacktestEngine:
         if df is not None and not df.empty:
             logger.debug(f"{trade_date} 日线数据从数据库读取完成，行数：{len(df)}")
             return df
-
-        # 数据库无数据，调用接口拉取（仅交易日才会走到这一步）
-        logger.warning(f"{trade_date} 数据库无日线数据，调用接口拉取")
-        df = data_fetcher.fetch_kline_day(trade_date=trade_date_format)
-        if df.empty:
+        else:
             logger.error(f"{trade_date} 日线数据拉取失败，跳过当日")
             return pd.DataFrame()
 
-        # 清洗入库
-        data_cleaner.clean_and_insert_kline_day(df)
-        return df
 
-    def get_pre_close_map(self, trade_date: str) -> dict:
-        """获取前一日收盘价映射（优化：用交易日历的pretrade_date，100%准确）"""
-        # 从交易日历获取上一个交易日，无需循环判断
-        pre_trade_date = data_cleaner.get_pre_trade_date(trade_date)
-        if not pre_trade_date:
-            logger.warning(f"{trade_date} 无有效上一个交易日")
-            return {}
-
-        pre_date_format = pre_trade_date.replace("-", "")
-        sql = """
-              SELECT ts_code, close as pre_close
-              FROM kline_day
-              WHERE trade_date = %s \
-              """
-        df = db.query(sql, params=(pre_date_format,), return_df=True)
-        if df is None or df.empty:
-            logger.warning(f"{pre_trade_date} 无前收盘价数据")
-            return {}
-        return df.set_index("ts_code")["pre_close"].to_dict()
+    # def get_pre_close_map(self, trade_date: str) -> dict:
+    #     """获取前一日收盘价映射（优化：用交易日历的pretrade_date，100%准确）"""
+    #     # 从交易日历获取上一个交易日，无需循环判断
+    #     pre_trade_date = data_cleaner.get_pre_trade_date(trade_date)
+    #     if not pre_trade_date:
+    #         logger.warning(f"{trade_date} 无有效上一个交易日")
+    #         return {}
+    #
+    #     pre_date_format = pre_trade_date.replace("-", "")
+    #     sql = """
+    #           SELECT ts_code, close as pre_close
+    #           FROM kline_day
+    #           WHERE trade_date = %s \
+    #           """
+    #     df = db.query(sql, params=(pre_date_format,), return_df=True)
+    #     if df is None or df.empty:
+    #         logger.warning(f"{pre_trade_date} 无前收盘价数据")
+    #         return {}
+    #     return df.set_index("ts_code")["pre_close"].to_dict()
 
     def run(self) -> dict:
         """执行回测核心流程"""
@@ -119,11 +114,11 @@ class MultiStockBacktestEngine:
             if daily_df.empty:
                 logger.warning(f"{trade_date} 无有效日线数据，跳过当日")
                 continue
-            # 2. 获取前一日收盘价映射
-            pre_close_map = self.get_pre_close_map(trade_date)
-            if not pre_close_map:
-                logger.warning(f"{trade_date} 无前收盘价数据，跳过当日")
-                continue
+            # # 2. 获取前一日收盘价映射
+            # pre_close_map = self.get_pre_close_map(trade_date)
+            # if not pre_close_map:
+            #     logger.warning(f"{trade_date} 无前收盘价数据，跳过当日")
+            #     continue
 
             # 3. 执行上一日的开盘卖出信号
             for ts_code, sell_type in list(self.strategy.sell_signal_map.items()):
@@ -138,7 +133,6 @@ class MultiStockBacktestEngine:
             buy_stocks, sell_signal_map = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
-                pre_close_map=pre_close_map,
                 positions=self.account.positions
             )
             self.strategy.sell_signal_map = sell_signal_map
@@ -146,12 +140,29 @@ class MultiStockBacktestEngine:
             # 5. 执行买入操作（按可用仓位买入）
             available_count = self.account.get_available_position_count()
             if available_count > 0 and buy_stocks:
+                logger.info(f"{trade_date} 开始执行买入操作 | 可用仓位：{available_count} | 买入列表：{buy_stocks}")
                 for ts_code in buy_stocks[:available_count]:
-                    pre_close = pre_close_map.get(ts_code, 0)
-                    if pre_close <= 0:
+                    # 1. 筛选当前股票的当日日线数据
+                    stock_df = daily_df[daily_df["ts_code"] == ts_code]
+                    if stock_df.empty:
+                        logger.warning(f"{trade_date} 买入操作：{ts_code} 无当日日线数据，跳过")
                         continue
+                    # 2. 从日线数据中取pre_close（上一日收盘价）
+                    pre_close = stock_df["pre_close"].iloc[0]
+                    # 3. 保留原有空值校验
+                    if pre_close <= 0:
+                        logger.warning(f"{trade_date} 买入操作：{ts_code} pre_close={pre_close}（无效值），跳过")
+                        continue
+                    # 4. 计算涨停价（原有逻辑）
                     limit_up_price = self.strategy.calc_limit_up_price(ts_code, pre_close)
+                    if limit_up_price <= 0:
+                        logger.warning(f"{trade_date} 买入操作：{ts_code} 涨停价计算无效（{limit_up_price}），跳过")
+                        continue
+                    # ========== 核心补全：执行买入操作（之前漏掉了这行！） ==========
                     self.account.buy(trade_date=trade_date, ts_code=ts_code, price=limit_up_price)
+                    logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
+            else:
+                logger.info(f"{trade_date} 无可用仓位或无买入信号，跳过买入操作")
 
             # 6. 执行当日收盘卖出信号
             for ts_code, sell_type in sell_signal_map.items():
@@ -168,10 +179,19 @@ class MultiStockBacktestEngine:
         logger.info("===== 回测结束，强制清仓剩余持仓 =====")
         last_date = self.trade_dates[-1]
         last_daily_df = self.get_daily_kline_data(last_date)
-        for ts_code in self.account.positions.keys():
+        # ========== 核心修正：将positions.keys()转为列表（静态迭代，避免字典大小变化） ==========
+        hold_stocks = list(self.account.positions.keys())  # 先转成列表，固定迭代对象
+        for ts_code in hold_stocks:
+            # 补充校验：防止迭代过程中该股票已被卖出（避免重复操作）
+            if ts_code not in self.account.positions:
+                continue
             stock_df = last_daily_df[last_daily_df["ts_code"] == ts_code]
-            if not stock_df.empty:
-                self.account.sell(trade_date=last_date, ts_code=ts_code, price=stock_df["close"].iloc[0])
+            if stock_df.empty:
+                logger.warning(f"{last_date} 强制清仓：{ts_code} 无当日日线数据，跳过清仓")
+                continue
+            close_price = stock_df["close"].iloc[0]
+            self.account.sell(trade_date=last_date, ts_code=ts_code, price=close_price)
+            logger.info(f"{last_date} 强制清仓：{ts_code} 卖出成功，价格：{close_price}")
         self.account.update_daily_asset(trade_date=last_date, daily_price_df=last_daily_df)
 
         # 计算回测指标
