@@ -1,2 +1,4 @@
 # 1. 忽略单个文件（精确路径）
 /config/.env
+.idea/
+.idea/workspace.xml
