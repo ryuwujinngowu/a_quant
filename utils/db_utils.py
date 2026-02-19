@@ -6,378 +6,281 @@ import pymysql
 from dbutils.pooled_db import PooledDB
 from dotenv import load_dotenv
 
-# 新增：导入日志器
 from utils.log_utils import logger
 
-# 加载配置文件（拼接项目根目录下的config/.env路径）
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env")
 load_dotenv(CONFIG_PATH)
 
 
 class DBConnector:
     """
-    阿里云RDS MySQL通用连接工具类（单例模式）
-    核心特性：
-    1. 连接池优化：避免频繁创建/销毁连接，提升高并发场景性能
-    2. 兼容量化场景：支持DataFrame批量插入（适配K线数据同步）
-    3. 安全防护：参数化SQL避免注入，异常捕获+事务回滚保证数据一致性
-    4. 版本兼容：适配DBUtils 1.x/2.x、MySQL 5.7+/8.0
+    MySQL连接工具类（单例 + 连接池）
+    优化点：
+    - 减少高频日志开销
+    - schema信息缓存
+    - 批量SQL分块执行
+    - DataFrame批量插入内存优化
+    - getenv集中读取
     """
-    # 单例实例，保证全局只有一个连接池，避免资源浪费
+
     _instance = None
 
     def __new__(cls):
-        """单例模式初始化：确保全局仅创建一个DBConnector实例"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._init_pool()  # 初始化连接池（仅第一次创建实例时执行）
+            cls._instance._init_pool()
             cls._instance.logger = logger
         return cls._instance
 
+    # =========================
+    # 连接池初始化（优化 getenv 读取）
+    # =========================
     def _init_pool(self):
-        """
-        初始化数据库连接池（核心方法）
-        可扩展点：
-        1. 支持多数据源配置（如读写分离，可新增read_host/read_port等配置）
-        2. 增加连接池状态监控（如空闲连接数、活跃连接数统计）
-        3. 加入连接重试机制（如初始化失败时重试3次）
-        """
-
         try:
-            self.pool = PooledDB(
-                creator=pymysql,          # 指定数据库驱动（固定为pymysql）
-                host=os.getenv("DB_HOST"),# 从配置文件读取数据库地址
-                port=int(os.getenv("DB_PORT")), # 数据库端口（转整型）
-                user=os.getenv("DB_USER"), # 数据库账号
-                password=os.getenv("DB_PASSWORD"), # 数据库密码
-                database=os.getenv("DB_NAME"), # 目标数据库名
-                charset="utf8mb4",        # 字符集（适配A股特殊符号/中文）
-                mincached=int(os.getenv("DB_MIN_CONNS")), # 最小空闲连接数（初始化时创建）
-                maxcached=int(os.getenv("DB_MAX_CONNS")), # 最大空闲连接数（超过则关闭）
-                maxconnections=50,        # 最大并发连接数（所有线程可获取的连接上限）
-                blocking=True,            # 无空闲连接时是否阻塞（True=等待，False=直接报错）
-                cursorclass=pymysql.cursors.DictCursor, # 游标类型（返回字典格式，更易用）
-                connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT")) # 连接超时时间（秒）
-            )
-            logger.debug("数据库连接池初始化成功")
-        except Exception as e:
-            # 初始化失败抛出明确异常，便于排查（如配置错误、网络不通、白名单问题）
-            logger.critical(f"数据库连接池初始化失败：{str(e)}")
-            raise RuntimeError(f"数据库连接池初始化失败：{str(e)}")
+            env = os.environ
+            self._db_name = env.get("DB_NAME")
 
-    def get_conn(self) -> Tuple[pymysql.connections.Connection, pymysql.cursors.Cursor]:
-        """
-        从连接池获取数据库连接和游标
-        返回值：
-            Tuple[Connection, Cursor]：数据库连接对象 + 游标对象
-        可扩展点：
-            1. 增加连接有效性校验（如ping()检测连接是否存活，失效则重新获取）
-            2. 记录连接获取/归还日志，便于排查连接泄漏问题
-        """
-        conn = self.pool.connection()  # 从连接池获取连接（非新建）
-        cursor = conn.cursor()         # 创建游标（支持字典格式返回）
-        logger.debug("成功从连接池获取数据库连接和游标")
+            self.pool = PooledDB(
+                creator=pymysql,
+                host=env.get("DB_HOST"),
+                port=int(env.get("DB_PORT")),
+                user=env.get("DB_USER"),
+                password=env.get("DB_PASSWORD"),
+                database=self._db_name,
+                charset="utf8mb4",
+                mincached=int(env.get("DB_MIN_CONNS", 2)),
+                maxcached=int(env.get("DB_MAX_CONNS", 10)),
+                maxconnections=50,
+                blocking=True,
+                cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=int(env.get("DB_CONNECT_TIMEOUT", 5))
+            )
+
+            logger.info("数据库连接池初始化成功")
+
+        except Exception as e:
+            logger.critical(f"数据库连接池初始化失败：{e}")
+            raise RuntimeError(e)
+
+    # =========================
+    # 获取连接（热路径，去日志）
+    # =========================
+    def get_conn(self):
+        conn = self.pool.connection()
+        cursor = conn.cursor()
         return conn, cursor
 
-    def close(self, conn: pymysql.connections.Connection, cursor: pymysql.cursors.Cursor):
-        """
-        关闭游标和连接（连接自动归还连接池，非真正关闭）
-        参数：
-            conn: 数据库连接对象（get_conn返回的conn）
-            cursor: 游标对象（get_conn返回的cursor）
-        可扩展点：
-            1. 增加异常分级处理（如游标关闭失败不影响连接归还）
-            2. 记录关闭失败日志，便于定位资源泄漏
-        """
-        try:
-            cursor.close()  # 先关闭游标
-            conn.close()    # 归还连接到池（不是关闭物理连接）
-            logger.debug("成功关闭游标并归还连接到连接池")
-        except Exception as e:
-            logger.error(f"关闭连接/游标失败：{str(e)}")
+    # =========================
+    # 关闭资源（静默失败）
+    # =========================
+    def close(self, conn, cursor):
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
-    def query(
-        self,
-        sql: str,
-        params: Optional[Tuple] = None,
-        return_df: bool = False
-    ) -> Optional[Union[List[Dict], pd.DataFrame]]:
-        """
-        通用查询方法（支持单条/批量查询，返回字典列表或DataFrame）
-        参数：
-            sql: 查询SQL语句（必须参数化，避免%s直接拼接）
-            params: SQL参数元组（如("600000.SH", "2024-01-01")），默认None
-            return_df: 是否返回DataFrame（量化场景常用），默认False（返回字典列表）
-        返回值：
-            Optional[Union[List[Dict], pd.DataFrame]]：查询结果（失败返回None）
-        可扩展点：
-            1. 增加分页功能（如limit/offset参数，支持大数据量分页查询）
-            2. 支持查询结果缓存（如高频查询的股票基础信息缓存）
-            3. 增加查询超时控制（避免慢查询阻塞）
-        """
-        conn, cursor = None, None
+    # =========================
+    # 查询
+    # =========================
+    def query(self, sql, params=None, return_df=False):
+        conn = cursor = None
         try:
-            conn, cursor = self.get_conn()          # 获取连接和游标
-            cursor.execute(sql, params or ())       # 执行查询（参数化避免SQL注入）
-            result = cursor.fetchall()              # 获取所有查询结果
-            logger.debug(f"SQL查询执行成功，SQL：{sql}，参数：{params}，结果行数：{len(result) if result else 0}")
+            conn, cursor = self.get_conn()
+            cursor.execute(sql, params or ())
+            logger.debug(f"查询sql: {(sql)} ，参数{params}")
+            result = cursor.fetchall()
+
             if return_df:
-                return pd.DataFrame(result)         # 量化场景返回DataFrame更易用
-            return result                           # 通用场景返回字典列表
-        except Exception as e:
-            # 打印详细错误信息（SQL+参数+异常），便于排查
-            logger.error(f"查询执行失败：SQL={sql}, params={params}, error={str(e)}")
-            return None
-        finally:
-            self.close(conn, cursor)  # 无论成败，最终关闭连接/游标
+                return pd.DataFrame.from_records(result)
 
-    def execute(
-        self,
-        sql: str,
-        params: Optional[Tuple] = None
-    ) -> Optional[int]:
-        """
-        通用执行方法（支持单条INSERT/UPDATE/DELETE，带事务）
-        参数：
-            sql: 执行SQL语句（如UPDATE/DELETE/单条INSERT）
-            params: SQL参数元组，默认None
-        返回值：
-            Optional[int]：影响的行数（失败返回None）
-        可扩展点：
-            1. 支持手动事务控制（如新增begin/commit/rollback方法）
-            2. 增加操作日志（记录执行的SQL、参数、影响行数、执行人）
-            3. 支持批量执行阈值（如行数>1000自动调用batch_execute）
-        """
-        conn, cursor = None, None
+            return result
+
+        except Exception as e:
+            logger.error(f"查询失败: {e}")
+            return None
+
+        finally:
+            self.close(conn, cursor)
+
+    # =========================
+    # 单条执行
+    # =========================
+    def execute(self, sql, params=None):
+        conn = cursor = None
         try:
-            conn, cursor = self.get_conn()          # 获取连接和游标
-            rows = cursor.execute(sql, params or ())# 执行SQL
-            conn.commit()                           # 提交事务（保证数据一致性）
-            logger.info(f"SQL执行成功（INSERT/UPDATE/DELETE），SQL：{sql}，参数：{params}，影响行数：{rows}")
-            return rows                             # 返回影响行数
+            conn, cursor = self.get_conn()
+            rows = cursor.execute(sql, params or ())
+            conn.commit()
+            return rows
+
         except Exception as e:
             if conn:
-                conn.rollback()                     # 执行失败回滚事务
-            logger.error(f"执行失败：SQL={sql}, params={params}, error={str(e)}")
+                conn.rollback()
+            logger.error(f"执行失败: {e}")
             return None
+
         finally:
-            self.close(conn, cursor)  # 无论成败，关闭连接/游标
+            self.close(conn, cursor)
 
-    # 在DBConnector类中新增以下方法（其他代码保持不变）
+    # =========================
+    # 表字段缓存
+    # =========================
     def get_table_columns(self, table_name: str) -> List[str]:
-        """
-        获取数据库表的所有字段名
-        :param table_name: 表名
-        :return: 字段名列表
-        """
-        try:
-            sql = f"""
-                SELECT COLUMN_NAME 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-            """
-            result = self.query(sql, (os.getenv("DB_NAME", "a_quant"), table_name))
-            if result:
-                columns = [row["COLUMN_NAME"] for row in result]
-                logger.debug(f"获取表{table_name}字段成功：{columns}")
-                return columns
-            else:
-                logger.warning(f"表{table_name}不存在或无字段")
-                return []
-        except Exception as e:
-            logger.error(f"获取表{table_name}字段失败：{str(e)}")
-            return []
+        if not hasattr(self, "_table_columns_cache"):
+            self._table_columns_cache = {}
 
-    def add_table_column(self, table_name: str, col_name: str, col_type: str = "VARCHAR(255)") -> bool:
+        if table_name in self._table_columns_cache:
+            return self._table_columns_cache[table_name]
+
+        sql = """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
         """
-        自动给数据库表新增字段（仅当字段不存在时）
-        :param table_name: 表名
-        :param col_name: 新增字段名
-        :param col_type: 字段类型（默认VARCHAR(255)，可根据需求调整）
-        :return: 是否新增成功
-        """
-        # 先检查字段是否已存在
+
+        result = self.query(sql, (self._db_name, table_name))
+        cols = [r["COLUMN_NAME"] for r in result] if result else []
+
+        self._table_columns_cache[table_name] = cols
+        return cols
+
+    # =========================
+    # 新增字段（最终有效版本）
+    # =========================
+    def add_table_column(self, table_name: str, col_name: str, col_type: str = "VARCHAR(255)",
+                         comment: str = "") -> bool:
+
         table_columns = self.get_table_columns(table_name)
+
         if col_name in table_columns:
-            logger.info(f"字段{col_name}已存在于表{table_name}，无需新增")
             return True
 
         try:
-            # 构建新增字段SQL（兼容MySQL）
-            sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type} DEFAULT '' COMMENT '{col_name}（Tushare自动新增）'"
+            sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+            if comment:
+                sql += f" COMMENT '{comment}'"
+            else:
+                sql += f" DEFAULT '' COMMENT '{col_name}'"
+
             self.execute(sql)
-            logger.info(f"表{table_name}新增字段{col_name}成功，类型：{col_type}")
+
+            # 更新缓存
+            self._table_columns_cache.pop(table_name, None)
+
             return True
+
         except Exception as e:
-            logger.error(f"表{table_name}新增字段{col_name}失败：{str(e)}")
+            logger.error(f"新增字段失败: {e}")
             return False
 
+    # =========================
+    # 批量新增字段
+    # =========================
     def batch_add_table_columns(self, table_name: str, col_names: List[str], col_type: str = "VARCHAR(255)") -> bool:
-        """
-        批量新增表字段
-        :param table_name: 表名
-        :param col_names: 字段名列表
-        :param col_type: 字段类型
-        :return: 是否全部成功
-        """
         success = True
         for col in col_names:
             if not self.add_table_column(table_name, col, col_type):
                 success = False
         return success
-    def batch_execute(
-        self,
-        sql: str,
-        params_list: List[Tuple]
-    ) -> Optional[int]:
-        """
-        批量执行方法（适配海量数据插入/更新，性能优于单条execute）
-        参数：
-            sql: 批量执行的SQL模板（如INSERT INTO table (col1) VALUES (%s)）
-            params_list: 参数列表（如[(v1,), (v2,), ...]）
-        返回值：
-            Optional[int]：影响的总行数（失败返回None）
-        可扩展点：
-            1. 增加批量大小分片（如每1000条分一次，避免单次批量过大）
-            2. 支持批量执行进度回调（如每完成10%打印进度）
-            3. 增加失败重试机制（如部分失败时重试该分片）
-        """
-        # 空参数列表直接返回，避免无效执行
+
+    # =========================
+    # 批量执行（分块优化）
+    # =========================
+    def batch_execute(self, sql: str, params_list: List[Tuple]) -> Optional[int]:
+
         if not params_list:
-            logger.warning("批量执行参数列表为空，无需执行")
             return 0
 
-        conn, cursor = None, None
+        CHUNK = 1000
+        total = 0
+
+        conn = cursor = None
+
         try:
-            conn, cursor = self.get_conn()              # 获取连接和游标
-            rows = cursor.executemany(sql, params_list) # 批量执行（底层优化，性能更高）
-            conn.commit()                               # 提交事务
-            logger.info(f"SQL批量执行成功，SQL模板：{sql}，参数列表长度：{len(params_list)}，影响行数：{rows}")
-            return rows                                 # 返回影响总行数
+            conn, cursor = self.get_conn()
+
+            for i in range(0, len(params_list), CHUNK):
+                chunk = params_list[i:i+CHUNK]
+                total += cursor.executemany(sql, chunk)
+
+            conn.commit()
+            return total
+
         except Exception as e:
             if conn:
-                conn.rollback()                         # 失败回滚
-            logger.error(f"批量执行失败：SQL={sql}, error={str(e)}")
+                conn.rollback()
+            logger.error(f"批量执行失败: {e}")
             return None
-        finally:
-            self.close(conn, cursor)  # 关闭连接/游标
 
-    # utils/db_utils.py 核心函数修正
-    def batch_insert_df(self, df: pd.DataFrame, table_name: str, ignore_duplicate: bool = True) -> Optional[int]:
-        """
-        DataFrame批量插入数据库（核心优化：完善异常捕捉+支持重复更新）
-        :param df: 待插入的DataFrame（字段需与表结构一致）
-        :param table_name: 目标表名
-        :param ignore_duplicate: True=重复则更新，False=重复则报错
-        :return: 影响行数（失败返回None）
-        """
+        finally:
+            self.close(conn, cursor)
+
+    # =========================
+    # DataFrame批量插入（内存优化）
+    # =========================
+    def batch_insert_df(self, df: pd.DataFrame, table_name: str, ignore_duplicate: bool = True):
+
         if df.empty:
-            self.logger.warning(f"DataFrame为空，表名：{table_name}，跳过插入")
             return 0
 
         try:
-            # 1. 转换DataFrame为可执行的SQL参数
             columns = df.columns.tolist()
             placeholders = ", ".join(["%s"] * len(columns))
             sql_columns = ", ".join(columns)
 
-            # 2. 处理重复数据：ON DUPLICATE KEY UPDATE（更新所有字段）
             if ignore_duplicate:
-                update_clause = ", ".join([f"{col}=VALUES({col})" for col in columns])
-                sql = f"""
-                    INSERT INTO {table_name} ({sql_columns}) 
-                    VALUES ({placeholders}) 
-                    ON DUPLICATE KEY UPDATE {update_clause}
-                """
+                update_clause = ", ".join([f"{c}=VALUES({c})" for c in columns])
+                sql = f"INSERT INTO {table_name} ({sql_columns}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {update_clause}"
             else:
                 sql = f"INSERT INTO {table_name} ({sql_columns}) VALUES ({placeholders})"
 
-            # 3. 转换DataFrame数据为元组列表
-            data = [tuple(row) for row in df.values]
+            data = list(df.itertuples(index=False, name=None))  # ✅ 内存优化
 
-            # 4. 批量执行
-            with self.pool.connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.executemany(sql, data)
-                    affected_rows = cursor.rowcount
-                    conn.commit()
-                    self.logger.debug(f"DataFrame批量插入成功：表名 {table_name}，影响行数 {affected_rows}，sql{sql}")
+            CHUNK = 1000
 
-                    return affected_rows
+            conn = cursor = None
+            conn, cursor = self.get_conn()
+
+            total = 0
+            for i in range(0, len(data), CHUNK):
+                total += cursor.executemany(sql, data[i:i+CHUNK])
+
+            conn.commit()
+            return total
 
         except Exception as e:
-            # 完善的异常捕捉：区分不同错误类型
-            error_msg = str(e)
-            if "Duplicate entry" in error_msg:
-                self.logger.error(f"批量插入失败：表名 {table_name}，重复数据错误 {error_msg}")
-            elif "Data too long" in error_msg:
-                self.logger.error(f"批量插入失败：表名 {table_name}，字段长度超限 {error_msg}")
-            elif "Unknown column" in error_msg:
-                self.logger.error(f"批量插入失败：表名 {table_name}，字段不存在 {error_msg}")
-            else:
-                self.logger.error(f"批量插入失败：表名 {table_name}，未知错误 {error_msg}")
-            # 回滚事务
-            if 'conn' in locals():
+            if 'conn' in locals() and conn:
                 conn.rollback()
+            logger.error(f"DF批量插入失败: {e}")
             return None
 
+        finally:
+            self.close(conn, cursor)
+
+    # =========================
+    # 获取A股代码（避免DF构造）
+    # =========================
     def get_all_a_stock_codes(self) -> List[str]:
-        """
-        从stock_basic表获取全市场A股代码列表（已上市，list_status='L'）
-        返回：有效A股代码列表（格式如600000.SH）
-        """
-        logger.info("===== 从stock_basic表读取全市场A股代码 =====")
-        try:
-            # 查询SQL（精准匹配A股代码格式）
-            sql = "SELECT DISTINCT ts_code FROM stock_basic WHERE list_status = 'L' "
-            # 使用query方法返回DataFrame（return_df=True）
-            df_codes = self.query(sql, return_df=True)
 
-            if df_codes.empty:
-                logger.warning("stock_basic表中无有效A股代码")
-                return []
+        sql = "SELECT DISTINCT ts_code FROM stock_basic WHERE list_status = 'L'"
 
-            codes = df_codes["ts_code"].dropna().tolist()
-            logger.info(f"成功获取 {len(codes)} 只有效A股代码")
-            return codes
-        except Exception as e:
-            logger.error(f"读取股票代码失败：{str(e)}", exc_info=True)
+        result = self.query(sql)
+
+        if not result:
             return []
 
-    def add_table_column(self, table_name: str, col_name: str, col_type: str = "VARCHAR(255)",
-                         comment: str = "") -> bool:
-        """
-        自动给数据库表新增字段（仅当字段不存在时）
-        扩展：支持添加字段注释
-        :param table_name: 表名
-        :param col_name: 新增字段名
-        :param col_type: 字段类型（默认VARCHAR(255)）
-        :param comment: 字段注释（可选）
-        :return: 是否新增成功
-        """
-        # 先检查字段是否已存在
-        table_columns = self.get_table_columns(table_name)
-        if col_name in table_columns:
-            logger.info(f"字段{col_name}已存在于表{table_name}，无需新增")
-            return True
-
-        try:
-            # 构建新增字段SQL（兼容MySQL，支持注释）
-            sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
-            if comment:
-                sql += f" COMMENT '{comment}'"
-            else:
-                sql += f" DEFAULT '' COMMENT '{col_name}（Tushare自动新增）'"
-
-            self.execute(sql)
-            logger.info(f"表{table_name}新增字段{col_name}成功，类型：{col_type}，注释：{comment}")
-            return True
-        except Exception as e:
-            logger.error(f"表{table_name}新增字段{col_name}失败：{str(e)}")
-            return False
+        return [r["ts_code"] for r in result if r["ts_code"]]
 
 
-# 全局单例实例（项目中直接导入该实例即可使用，无需重复创建）
+# =========================
+# 全局单例
+# =========================
 db = DBConnector()
 
 if __name__ == "__main__":

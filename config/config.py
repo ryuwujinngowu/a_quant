@@ -14,7 +14,10 @@ RISK_FREE_RATE = 0.03           # 无风险年化收益率
 
 # ===================== 分仓策略配置 =====================
 MAX_POSITION_COUNT = 5  # 最大持仓数，总仓位均分5份
-
+# 股票类型过滤配置
+FILTER_BSE_STOCK = True    # 过滤北交所股票
+FILTER_STAR_BOARD = False  # 不过滤双创板（创业板/科创板）
+FILTER_MAIN_BOARD = False  # 不过滤主板
 # ===================== A股板块涨停阈值配置（带0.2%容错） =====================
 # 主板（60/00开头）
 MAIN_BOARD_LIMIT_UP_RATE = 0.098

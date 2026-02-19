@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 
-from config.config import DAILY_LIMIT_UP_RATE
 # 复用你项目的日志
 from utils.log_utils import logger
 

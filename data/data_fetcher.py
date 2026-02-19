@@ -159,7 +159,7 @@ class DataFetcher:
             "start_date": start_date,
             "end_date": end_date
         })
-
+        logger.info(f"[DEBUG] 调用行情接口: {trade_date}")
         try:
             kline_df = self.pro.daily(**params)
             logger.debug(f"日线数据获取，参数：{params}，行数：{len(kline_df)}")
@@ -367,17 +367,17 @@ if __name__ == "__main__":
     # except Exception as e:
     #     logger.error(f"接口测试失败，错误信息：{str(e)} ❌")
     """测试新增的Kline_day接口"""
-    logger.info("===== 测试：获取日线数据 =====")
-    stock_Kline_day = data_fetcher.fetch_kline_day(
-        ts_code="301613.SZ",
-        trade_date="",
-        start_date='20250516',
-        end_date= '20250521'
-
-    )
-    if stock_Kline_day is not None:
-        logger.info(f"日线数据预览：\n{stock_Kline_day.head(3)}")
-    logger.info("\n=====获取日线数据测试完成 ✅ =====")
+    # logger.info("===== 测试：获取日线数据 =====")
+    # stock_Kline_day = data_fetcher.fetch_kline_day(
+    #     ts_code="000426.SZ",
+    #     trade_date="",
+    #     start_date='20250516',
+    #     end_date= '20250521'
+    #
+    # )
+    # if stock_Kline_day is not None:
+    #     logger.info(f"日线数据预览：\n{stock_Kline_day.head(3)}")
+    # logger.info("\n=====获取日线数据测试完成 ✅ =====")
     # ===================== 新增：指数日线接口测试代码 =====================
     """测试新增的index_daily接口"""
     # try:
@@ -404,4 +404,42 @@ if __name__ == "__main__":
     #     logger.info("\n===== 获取指数日线数据测试完成 ✅ =====")
     # except Exception as e:
     #     logger.error(f"指数日线数据测试失败，错误信息：{str(e)} ❌")
-
+# """===================== 分钟线接口（fetch_stk_mins）专项测试用例 ====================="""
+# try:
+#     # 全局配置：显示所有列，方便查看返回结果
+#     pd.set_option('display.max_columns', None)
+#     pd.set_option('display.width', None)
+#
+#     logger.info("===== 测试1：有效股票+完整交易日分钟线（1min） =====")
+#     # 测试标的：000001.SZ（平安银行，确保有数据）
+#     # 测试日期：2026-01-05（你的回测日期，交易日）
+#     mins_df_1 = data_fetcher.fetch_stk_mins(
+#         ts_code="000001.SZ",
+#         freq="1min",
+#         start_date="2026-01-05 09:25:00",
+#         end_date="2026-01-05 15:00:00"
+#     )
+#     if not mins_df_1.empty:
+#         logger.info(f"✅ 有效股票分钟线获取成功，行数：{len(mins_df_1)}")
+#         logger.info(f"返回字段：{mins_df_1.columns.tolist()}")
+#         logger.info(f"前5行数据：\n{mins_df_1.head()}")
+#     else:
+#         logger.error(f"❌ 有效股票分钟线返回空（可能：日期非交易日/权限不足/接口无数据）")
+#
+# except Exception as e:
+#     logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
+#     logger.info("===== 测试：获取交易日历数据 =====")
+    # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
+    # trade_cal_df = data_fetcher.fetch_trade_cal(
+    #     start_date='20250516',
+    #     end_date='20250521',
+    #     exchange="SSE",
+    #     is_open=1  # 仅获取交易日，不传则返回全部（含休市）
+    # )
+    # # 数据预览
+    # if not trade_cal_df.empty:
+    #     logger.info(f"交易日历数据预览（仅交易日）：\n{trade_cal_df.head(10)}")
+    #     logger.info(f"有效交易日数量：{len(trade_cal_df)}")
+    # else:
+    #     logger.warning("⚠️  未获取到交易日历数据！")
+    # logger.info("\n===== 获取交易日历数据测试完成 ✅ =====\n")

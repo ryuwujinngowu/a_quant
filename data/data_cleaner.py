@@ -366,7 +366,6 @@ class DataCleaner:
         if raw_df.empty:
             logger.debug("指数日线原始数据为空，跳过入库")
             return 0
-
         # 2. 通用清洗
         clean_df = self._clean_special_fields(raw_df)
         if clean_df.empty:
@@ -420,6 +419,7 @@ class DataCleaner:
 
     def clean_and_insert_kline_min(self, raw_df: pd.DataFrame, table_name: str = "kline_min") -> Optional[int]:
         """分钟线数据清洗入库（精简冗余逻辑）"""
+        logger.debug(f"分钟线数据入库")
         if raw_df.empty:
             return 0
 
@@ -444,7 +444,19 @@ class DataCleaner:
             return None
 
     def get_kline_min_by_stock_date(self, ts_code: str, trade_date: str, table_name: str = "kline_min") -> pd.DataFrame:
-        """查询指定股票/日期的分钟线数据（精简SQL，保留核心）"""
+        """
+        获取单只股票单日分钟线数据（核心修复：查库→拉接口→入库→再查库）
+        :param ts_code: 股票代码（如000001.SZ）
+        :param trade_date: 交易日（格式：YYYY-MM-DD）
+        :param table_name: 数据库表名
+        :return: 分钟线DataFrame（空则返回空DF）
+        """
+        # 第一步：参数校验
+        if not ts_code or not trade_date:
+            logger.error("股票代码/交易日为空，返回空数据")
+            return pd.DataFrame()
+
+        # 第二步：查询数据库（核心修复：trade_date用字符串匹配）
         sql = """
             SELECT ts_code, trade_time, trade_date, open, close, high, low, volume, amount
             FROM {table}
@@ -452,12 +464,40 @@ class DataCleaner:
             ORDER BY trade_time ASC
         """.format(table=table_name)
 
-        df = db.query(sql, params=(ts_code, trade_date), return_df=True)
-        if df.empty:
+        try:
+            df = db.query(sql, params=(ts_code, trade_date), return_df=True)
+            if not df.empty:
+                df["trade_time"] = pd.to_datetime(df["trade_time"])
+                logger.debug(f"[{ts_code}-{trade_date}] 从数据库获取分钟线，行数：{len(df)}")
+                return df
+        except Exception as e:
+            logger.error(f"[{ts_code}-{trade_date}] 查库失败：{str(e)}")
+
+        # 第三步：数据库无数据，调用接口拉取
+        logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，调用接口拉取")
+        raw_df = data_fetcher.fetch_stk_mins(
+            ts_code=ts_code,
+            freq="1min",
+            start_date=f"{trade_date} 09:25:00",
+            end_date=f"{trade_date} 15:00:00"
+        )
+        if raw_df.empty:
+            logger.warning(f"[{ts_code}-{trade_date}] 接口拉取失败，返回空数据")
             return pd.DataFrame()
 
-        df["trade_time"] = pd.to_datetime(df["trade_time"])
-        return df
+        # 第四步：清洗+入库
+        self.clean_and_insert_kline_min(raw_df, table_name)
+
+        # 第五步：再次查询数据库（确保返回最新入库数据）
+        try:
+            df = db.query(sql, params=(ts_code, trade_date), return_df=True)
+            if not df.empty:
+                df["trade_time"] = pd.to_datetime(df["trade_time"])
+            logger.debug(f"[{ts_code}-{trade_date}] 入库后查询分钟线，行数：{len(df)}")
+            return df
+        except Exception as e:
+            logger.error(f"[{ts_code}-{trade_date}] 入库后查库失败：{str(e)}")
+            return pd.DataFrame()
 
     def truncate_kline_min_table(self, table_name: str = "kline_min"):
         """清空分钟线表（精简逻辑）"""

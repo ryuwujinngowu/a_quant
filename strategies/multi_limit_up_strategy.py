@@ -1,221 +1,411 @@
-from datetime import datetime
-
+from typing import List, Dict, Tuple, Optional
 import pandas as pd
 
-from config.config import MAIN_BOARD_LIMIT_UP_RATE, STAR_BOARD_LIMIT_UP_RATE
+# 导入核心配置：涨停率、最大持仓数 + 新增可配置的股票类型过滤开关
+from config.config import (
+    MAIN_BOARD_LIMIT_UP_RATE,
+    STAR_BOARD_LIMIT_UP_RATE,
+    MAX_POSITION_COUNT,
+    FILTER_BSE_STOCK,  # 新增配置：是否过滤北交所股票（True/False）
+    FILTER_STAR_BOARD,  # 新增配置：是否过滤双创板（创业板/科创板，True/False）
+    FILTER_MAIN_BOARD  # 新增配置：是否过滤主板（True/False）
+)
 from data.data_cleaner import data_cleaner
 from data.data_fetcher import data_fetcher
 from strategies.base_strategy import BaseStrategy
 from utils.log_utils import logger
 
+# 分钟线缓存开关（全局配置）
+CACHE_ENABLE = True
+
 
 class MultiLimitUpStrategy(BaseStrategy):
-    """
-    全市场分仓涨停策略
-    核心规则：
-    1. 选股：每日全市场涨停股票，剔除集合竞价一字板，按首次涨停时间从早到晚排序，选前5
-    2. 买入：每只股票占用1/5仓位，涨停价买入
-    3. 卖出：
-       - 规则1：买入当日收盘未涨停，次日开盘价卖出
-       - 规则2：买入次日收盘未涨停，当日收盘价卖出
-    """
+    """多标的涨停策略（核心：首次触板/一字板回封选股，分仓控制）"""
 
     def __init__(self):
-        self.sell_signal_map = {}  # 卖出信号映射：key=ts_code，value=open/close
-        self.initialize()
+        """策略初始化：加载配置+初始化缓存/信号容器"""
+        self.max_position_count = MAX_POSITION_COUNT  # 最大持仓数量（分仓个数）
+        self.limit_up_price_tolerance = 0.995  # 涨停价容忍度（避免价格微小误差漏判）
+        self.sell_signal_map: Dict[str, str] = {}  # 卖出信号映射：{股票代码: 卖出类型(open/close)}
+        self.min_data_cache: Dict[tuple, pd.DataFrame] = {}  # 分钟线缓存：{(ts_code, trade_date): 分钟线DF}
+        self.initialize()  # 重置信号/缓存
 
     def initialize(self):
-        """策略初始化，每次回测前自动调用"""
-        self.sell_signal_map = {}
-        logger.info("全市场分仓涨停策略初始化完成")
+        """策略重置（回测/实盘启动前执行）"""
+        self.sell_signal_map = {}  # 清空卖出信号（避免跨周期残留）
+        if CACHE_ENABLE:
+            self.min_data_cache.clear()  # 清空分钟线缓存
 
+    # ========= 涨停幅度计算（核心工具方法） =========
     def get_limit_up_rate_by_ts_code(self, ts_code: str) -> float:
         """
-        根据股票代码自动判断涨停阈值（新增：识别北交所股票）
-        - 主板(60xxxx/00xxxx)：10%
-        - 创业板(300xxxx)、科创板(688xxxx)：20%
-        - 北交所(83/87/88开头)：返回0（标记为非涨停判断范围）
+        根据股票代码判断涨停幅度（区分主板/双创板/北交所）
+        :param ts_code: 股票代码（如600000.SH、300001.SZ、830001.BJ）
+        :return: 涨停幅度（0=北交所/10%=主板/20%=双创板）
         """
-        if not isinstance(ts_code, str):
-            return MAIN_BOARD_LIMIT_UP_RATE
-
-        # 提取纯数字代码 + 交易所后缀
-        code_part = ts_code.split('.')[0] if '.' in ts_code else ts_code
-        exchange_part = ts_code.split('.')[1] if '.' in ts_code else ''
-
-        # 第一步：剔除北交所股票（83/87/88开头 + .BJ后缀）
-        if (code_part.startswith(('83', '87', '88'))) or (exchange_part == 'BJ'):
-            return 0.0  # 返回0，后续涨停判断会自动剔除
-
-        # 第二步：判断创业板/科创板（20cm）
-        if code_part.startswith(('300', '688')):
-            return STAR_BOARD_LIMIT_UP_RATE
-        # 第三步：主板（10cm）
-        else:
-            return MAIN_BOARD_LIMIT_UP_RATE
-
-    def calc_limit_up_price(self, ts_code: str, pre_close: float) -> float:
-        """
-        【支持20cm涨停】按板块计算涨停价
-        :param ts_code: 股票代码（如600000.SH/300001.SZ）
-        :param pre_close: 前收盘价
-        :return: 涨停价（保留2位小数）
-        """
-        # 先校验参数有效性
-        if pre_close <= 0:
-            logger.warning(f"{ts_code} 前收盘价无效（{pre_close}），无法计算涨停价")
+        code, exch = ts_code.split('.')
+        # 北交所股票：无涨停限制
+        if code.startswith(('83', '87', '88')) or exch == 'BJ':
             return 0.0
+        # 双创板（创业板300/科创板688）：20%涨停
+        if code.startswith(('300', '688')):
+            return STAR_BOARD_LIMIT_UP_RATE
+        # 主板（沪市60/深市00）：10%涨停
+        return MAIN_BOARD_LIMIT_UP_RATE
 
-        # 此时ts_code是函数参数，已定义，无红线
-        limit_rate = self.get_limit_up_rate_by_ts_code(ts_code)
-        return round(pre_close * (1 + limit_rate), 2)
-
-    def get_daily_limit_up_stocks(self, daily_df: pd.DataFrame) -> list:
-        """【支持20cm+剔除北交所】从当日全市场日线数据中筛选涨停股票"""
-        if daily_df.empty:
-            return []
-
-        # ========== 新增：第一步先过滤北交所股票 ==========
-        # 过滤规则：代码以83/87/88开头 或 交易所后缀为BJ
-        def is_not_bse_stock(ts_code):
-            if not isinstance(ts_code, str):
-                return False
-            code_part = ts_code.split('.')[0] if '.' in ts_code else ts_code
-            exchange_part = ts_code.split('.')[1] if '.' in ts_code else ''
-            return not (code_part.startswith(('83', '87', '88')) or exchange_part == 'BJ')
-
-        # 过滤掉北交所股票
-        daily_df = daily_df[daily_df['ts_code'].apply(is_not_bse_stock)]
-        if daily_df.empty:
-            logger.info("过滤北交所股票后，无剩余股票参与涨停判断")
-            return []
-
-        limit_up_stocks = []
-
-        # 遍历剩余股票，进行涨停判断（原有逻辑不变）
-        for idx, row in daily_df.iterrows():
-            if "ts_code" not in row.index:
-                logger.warning(f"日线数据缺少ts_code字段，跳过该行")
-                continue
-
-            ts_code = row["ts_code"]
-            pre_close = row.get("pre_close", 0)
-            close = row.get("close", 0)
-            high = row.get("high", 0)
-
-            if pre_close <= 0 or close <= 0 or high <= 0:
-                logger.debug(f"{ts_code} 价格数据无效，跳过")
-                continue
-
-            # 若为北交所股票，limit_rate=0，自动跳过涨停判断
-            limit_rate = self.get_limit_up_rate_by_ts_code(ts_code)
-            if limit_rate == 0.0:
-                continue  # 兜底：再次过滤北交所股票
-
-            limit_up_price = pre_close * (1 + limit_rate)
-            # 涨停条件：收盘价 & 最高价 达到涨停价（允许0.5%误差）
-            is_limit_up = (close >= limit_up_price * 0.995) and (high >= limit_up_price * 0.995)
-
-            if is_limit_up:
-                limit_up_stocks.append(ts_code)
-
-        logger.info(f"当日涨停股票数量（含20cm，剔除北交所）：{len(limit_up_stocks)}")
-        return limit_up_stocks
-
-    def get_stock_limit_up_time(self, ts_code: str, trade_date: str, pre_close: float) -> datetime:
+    def calc_limit_up_price(self, ts_code, pre_close):
         """
-        获取单只股票首次自然涨停时间
-        :return: 首次涨停时间，一字板/无数据返回None
+        计算涨停价（含数据校验，确保结果符合业务逻辑）
+        :param ts_code: 股票代码
+        :param pre_close: 前收盘价（元）
+        :return: 涨停价（保留2位小数，无效值返回0）
         """
-        limit_up_price = self.calc_limit_up_price(ts_code, pre_close)
-        # 拉取当日集合竞价到收盘的分钟线
-        start_time = f"{trade_date} 09:25:00"
-        end_time = f"{trade_date} 15:00:00"
-        raw_df = data_fetcher.fetch_stk_mins(
-            ts_code=ts_code,
-            freq="1min",
-            start_date=start_time,
-            end_date=end_time
-        )
-        if raw_df.empty:
-            return None
+        # 问题5：数据校验，避免前收盘价≤0导致计算错误
+        if pre_close <= 0:
+            logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0")
+            return 0
+        # 涨停价公式：前收盘价 × (1 + 涨停幅度)，四舍五入保留2位小数（符合A股价格精度）
+        limit_up_price = round(pre_close * (1 + self.get_limit_up_rate_by_ts_code(ts_code)), 2)
+        logger.debug(
+            f"[{ts_code}] 前收盘价={pre_close}，涨停幅度={self.get_limit_up_rate_by_ts_code(ts_code)}，涨停价={limit_up_price}")
+        return limit_up_price
 
-        # 清洗入库
-        data_cleaner.clean_and_insert_kline_min(raw_df)
-        # 查询格式化后的分钟线
+    def _filter_stock_by_type(self, ts_code: str) -> bool:
+        """
+        问题4：可配置的股票类型过滤（替代原_is_not_bse_stock）
+        :param ts_code: 股票代码
+        :return: True=保留该股票（符合过滤规则），False=过滤掉
+        """
+        code, exch = ts_code.split('.')
+        # 北交所股票过滤逻辑
+        is_bse = code.startswith(('83', '87', '88')) or exch == 'BJ'
+        if FILTER_BSE_STOCK and is_bse:
+            return False  # 过滤北交所
+
+        # 双创板（创业板/科创板）过滤逻辑
+        is_star_board = code.startswith(('300', '688'))
+        if FILTER_STAR_BOARD and is_star_board:
+            return False  # 过滤双创板
+
+        # 主板过滤逻辑
+        is_main_board = not (is_bse or is_star_board)
+        if FILTER_MAIN_BOARD and is_main_board:
+            return False  # 过滤主板
+
+        # 保留该股票
+        return True
+
+    # ========= 分钟线数据获取（核心工具方法） =========
+    def _get_min_df(self, ts_code, trade_date):
+        key = (ts_code, trade_date)
+        if key in self.min_data_cache:
+            logger.debug(f"[{ts_code}-{trade_date}] 分钟线缓存命中，直接返回")
+            return self.min_data_cache[key]
+
+        # 第一步：优先调用cleaner已有方法获取分钟线
         min_df = data_cleaner.get_kline_min_by_stock_date(ts_code, trade_date)
-        if min_df.empty:
+        if not min_df.empty:
+            self.min_data_cache[key] = min_df
+            logger.debug(f"[{ts_code}-{trade_date}] 从数据库读取分钟线数据，行数={len(min_df)}")
+            return min_df
+
+
+    # ========= 首次触板判断（核心选股逻辑） =========
+    def get_first_limit_time(self, min_df, limit_price):
+        """
+        问题2：改用high判断触板（分钟内high触涨停但close回落也需算触板）
+        :param min_df: 分钟线DF
+        :param limit_price: 涨停价（元）
+        :return: 首次触板时间（datetime/None）
+        """
+        # 确保trade_time为datetime类型（避免字符串排序错误）
+        if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
+            min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
+
+        # 问题2修复：用high代替close，因为分钟内最高价触板即算触板（即使收盘回落）
+        hit = min_df[min_df.high >= limit_price * self.limit_up_price_tolerance]
+        logger.debug(f"触板判断：涨停价={limit_price}，容忍度={self.limit_up_price_tolerance}，触板分钟数={len(hit)}")
+
+        if hit.empty:
             return None
 
-        # 剔除一字板：9:25集合竞价已涨停
-        call_auction_df = min_df[min_df["trade_time"] == f"{trade_date} 09:25:00"]
-        if not call_auction_df.empty:
-            if call_auction_df["close"].iloc[0] >= limit_up_price * 0.995:
-                logger.debug(f"{ts_code} 为一字板，剔除")
-                return None
+        # 按时间排序，取首次触板时间
+        first_hit_time = hit.sort_values("trade_time").trade_time.iloc[0]
+        logger.debug(f"首次触板时间={first_hit_time}")
+        return first_hit_time
 
-        # 筛选9:30之后首次涨停的分钟线
-        trading_min_df = min_df[min_df["trade_time"] >= f"{trade_date} 09:30:00"]
-        limit_up_min_df = trading_min_df[trading_min_df["close"] >= limit_up_price * 0.995]
-        if limit_up_min_df.empty:
+    # ========= 一字板回封判断（核心选股逻辑） =========
+    def check_reopen(self, min_df, limit_price, daily_row):
+        """
+        问题3：重构一字板判断逻辑（改用日K开盘价，而非9:25分数据）
+        :param min_df: 分钟线DF
+        :param limit_price: 涨停价（元）
+        :param daily_row: 该股票当日日线数据（Series）
+        :return: 回封时间（datetime/None）
+        """
+        # 数据校验：缺失核心字段直接返回None
+        if "trade_time" not in min_df.columns:
+            logger.debug("分钟线缺失trade_time字段，跳过一字板回封判断")
             return None
 
-        # 返回首次涨停时间
-        first_limit_up_time = limit_up_min_df["trade_time"].min()
-        logger.debug(f"{ts_code} 首次涨停时间：{first_limit_up_time}")
-        return first_limit_up_time
+        # 统一trade_time为datetime类型
+        if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
+            min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
 
-    def select_stocks(self, trade_date: str, daily_df: pd.DataFrame, pre_close_map: dict) -> list:
-        """选股核心逻辑：按涨停时间排序，选前5"""
-        # 1. 获取当日涨停股票
-        limit_up_stocks = self.get_daily_limit_up_stocks(daily_df)
-        if not limit_up_stocks:
-            logger.info("当日无涨停股票，无选股")
+        # 问题3修复：用日K开盘价判断一字板（open≥涨停价×容忍度）
+        open_price = daily_row["open"]
+        is_limit_open = open_price >= limit_price * self.limit_up_price_tolerance
+        if not is_limit_open:
+            logger.debug(
+                f"日K开盘价={open_price} < 涨停价×容忍度={limit_price * self.limit_up_price_tolerance}，非一字板")
+            return None
+
+        # 一字板前提下，判断开板回封
+        df = min_df.sort_values("trade_time").reset_index(drop=True)
+        for i, row in df.iterrows():
+            # 开板判定：分钟最低价 < 涨停价×容忍度
+            if row.low < limit_price * self.limit_up_price_tolerance:
+                logger.debug(f"[{row.trade_time}] 一字板开板，最低价={row.low}")
+                # 情况1：本分钟回封（收盘价≥涨停价×容忍度）
+                if row.close >= limit_price * self.limit_up_price_tolerance:
+                    logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
+                    return row.trade_time
+                # 情况2：下一分钟回封（跨分钟回封）
+                if i + 1 < len(df):
+                    next_row = df.iloc[i + 1]
+                    if next_row.close >= limit_price * self.limit_up_price_tolerance:
+                        logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
+                        return next_row.trade_time
+
+        # 一字板开板后未回封
+        logger.debug("一字板开板后未回封，返回None")
+        return None
+
+    # ========= 核心选股逻辑（生成买入列表） =========
+    def select_buy_stocks(self, trade_date, daily_df, available_pos):
+        """
+        筛选买入股票（首次触板/一字板回封）- 性能优化版（保留全量遍历，保证排序准确性）
+        :param trade_date: 交易日
+        :param daily_df: 当日全市场日线DF
+        :param available_pos: 可用仓位数量
+        :return: 买入股票列表（按触板/回封时间排序）
+        """
+        if available_pos <= 0:
+            logger.debug(f"[{trade_date}] 可用仓位={available_pos}，无买入")
             return []
 
-        # 2. 遍历获取每只股票的涨停时间
-        stock_time_list = []
-        for ts_code in limit_up_stocks:
-            pre_close = pre_close_map.get(ts_code, 0)
-            if pre_close <= 0:
+        # 过滤股票类型 + 过滤无效前收盘价（保留copy消除警告）
+        daily_df_filtered = daily_df.loc[
+            daily_df.ts_code.apply(self._filter_stock_by_type) & (daily_df["pre_close"] > 0)
+            ].copy()
+        logger.debug(f"[{trade_date}] 过滤后股票数量={len(daily_df_filtered)}")
+
+        # 向量化计算涨停价（原逻辑不变）
+        rates = daily_df_filtered.ts_code.map(self.get_limit_up_rate_by_ts_code)
+        daily_df_filtered["limit_up_price"] = (daily_df_filtered.pre_close * (1 + rates)).round(2)
+        logger.debug(f"[{trade_date}] 向量化计算涨停价完成，有效股票数={len(daily_df_filtered)}")
+
+        # 候选池生成（原逻辑不变）
+        candidates = daily_df_filtered[
+            daily_df_filtered.high >= daily_df_filtered.limit_up_price * self.limit_up_price_tolerance
+            ]
+        candidate_count = len(candidates)
+        logger.info(f"{trade_date} 候选池数量: {candidate_count}")
+
+        # ========== 核心优化1：批量+多线程获取所有候选股分钟线（解决接口耗时） ==========
+        min_data_dict = {}
+        if candidate_count > 0:
+            candidate_ts_codes = candidates.ts_code.unique()
+            min_data_dict = self._batch_get_min_df(candidate_ts_codes, trade_date)
+        logger.debug(f"[{trade_date}] 批量获取{len(min_data_dict)}只候选股分钟线完成")
+
+        # ========== 优化2：预计算常量（减少循环内属性访问） ==========
+        tolerance = self.limit_up_price_tolerance
+        hits = {}  # 存储所有符合条件股票的触板/回封时间（全量收集）
+
+        # ========== 保留全量遍历（保证排序准确性） ==========
+        for row in candidates.itertuples(index=False):
+            ts = row.ts_code
+            limit_price = row.limit_up_price
+
+            # 从批量结果中取分钟线（无IO，直接读内存字典）
+            min_df = min_data_dict.get(ts, pd.DataFrame())
+            if min_df is None or min_df.empty:
+                logger.debug(f"[{ts}-{trade_date}] 无分钟线数据，跳过该股票")
                 continue
-            limit_up_time = self.get_stock_limit_up_time(ts_code, trade_date, pre_close)
-            if limit_up_time is not None:
-                stock_time_list.append({"ts_code": ts_code, "limit_up_time": limit_up_time})
 
-        # 3. 按涨停时间从早到晚排序，选前5
-        stock_time_list.sort(key=lambda x: x["limit_up_time"])
-        selected_stocks = [item["ts_code"] for item in stock_time_list[:5]]
-        logger.info(f"当日选中股票：{selected_stocks}")
-        return selected_stocks
+            # ========== 原核心逻辑完全不变（全量校验） ==========
+            is_limit_open = row.open >= limit_price * tolerance
+            if is_limit_open:
+                logger.debug(f"[{ts}-{trade_date}] 判定为一字板，需校验开板+回封")
+                t = self.check_reopen(min_df, limit_price, row)
+                if not t:
+                    logger.debug(f"[{ts}-{trade_date}] 一字板但未开板/未回封，实盘无法买入，跳过")
+                    continue
+                hits[ts] = t  # 全量收集，不提前终止
+            else:
+                t = self.get_first_limit_time(min_df, limit_price)
+                if t:
+                    logger.debug(f"[{ts}-{trade_date}] 非一字板，首次触板时间={t}，纳入买入候选")
+                    hits[ts] = t  # 全量收集，不提前终止
+                else:
+                    logger.debug(f"[{ts}-{trade_date}] 非一字板且无首次触板，跳过")
 
-    def generate_signal(self, trade_date: str, daily_df: pd.DataFrame, pre_close_map: dict, positions: dict) -> tuple:
+        # ========== 原排序逻辑不变（基于全量hits排序，保证准确性） ==========
+        ordered = sorted(hits.items(), key=lambda x: x[1])
+        buy_stocks = [x[0] for x in ordered[:available_pos]]
+        logger.info(f"{trade_date} 最终买入列表（符合实盘逻辑）：{buy_stocks}，数量={len(buy_stocks)}")
+        return buy_stocks
+
+    # ========== 保留：批量+多线程获取分钟线的辅助方法（核心优化，不影响排序） ==========
+    def _batch_get_min_df(self, ts_codes, trade_date):
         """
-        每日生成买卖信号（回测引擎调用）
-        :return: (买入股票列表, 卖出信号字典)
+        多线程批量获取分钟线（复用原_get_min_df逻辑，仅并行执行，保证数据完整）
+        :param ts_codes: 股票代码列表
+        :param trade_date: 交易日
+        :return: {ts_code: min_df}
         """
-        # 1. 生成卖出信号
+        import concurrent.futures
+        min_data_dict = {}
+
+        # 第一步：先查缓存（复用原缓存逻辑，无IO）
+        cache_hits = []
+        cache_misses = []
+        for ts in ts_codes:
+            key = (ts, trade_date)
+            if key in self.min_data_cache and not self.min_data_cache[key].empty:
+                min_data_dict[ts] = self.min_data_cache[key]
+                cache_hits.append(ts)
+            else:
+                cache_misses.append(ts)
+        logger.debug(f"[{trade_date}] 分钟线缓存命中{len(cache_hits)}只，未命中{len(cache_misses)}只")
+
+        # 第二步：多线程获取未命中缓存的股票（核心：并行IO，不影响数据完整性）
+        if cache_misses:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(self._get_min_df, ts, trade_date): ts for ts in cache_misses}
+                for future in concurrent.futures.as_completed(futures):
+                    ts = futures[future]
+                    try:
+                        min_df = future.result()
+                        min_data_dict[ts] = min_df
+                        # 存入缓存（复用原逻辑）
+                        if min_df is not None and not min_df.empty:
+                            self.min_data_cache[(ts, trade_date)] = min_df
+                    except Exception as e:
+                        logger.error(f"[{ts}-{trade_date}] 批量获取分钟线失败：{str(e)}")
+                        min_data_dict[ts] = pd.DataFrame()
+
+        return min_data_dict
+
+    # ========== 核心改动2：重构check_reopen方法，强化开板校验 ==========
+    def check_reopen(self, min_df, limit_price, daily_row):
+        """
+        校验一字板开板回封（严格符合实盘：必须开板且回封）
+        :param min_df: 分钟线DF
+        :param limit_price: 涨停价
+        :param daily_row: 日线数据（NamedTuple/Series）
+        :return: 回封时间（datetime/None）
+        """
+        tolerance = self.limit_up_price_tolerance
+        threshold = limit_price * tolerance
+
+        # 1. 再次确认一字板（双层校验，避免漏判）
+        open_price = daily_row.open if hasattr(daily_row, 'open') else 0
+        if open_price < threshold:
+            logger.debug(f"非一字板（开盘价={open_price} < 阈值={threshold}），跳过回封校验")
+            return None
+
+        # 2. 校验是否开板（核心：存在至少1分钟的最低价 < 阈值）
+        min_low = min_df['low'].min()
+        if min_low >= threshold:
+            logger.debug(f"一字板全天未开板（最低low={min_low} ≥ 阈值={threshold}），实盘无法买入，返回None")
+            return None
+
+        # 3. 校验开板后是否回封
+        df = min_df.sort_values("trade_time").reset_index(drop=True)
+        for i, row in df.iterrows():
+            # 开板判定：本分钟最低价 < 阈值
+            if row.low < threshold:
+                logger.debug(f"[{row.trade_time}] 一字板开板（low={row.low} < 阈值={threshold}）")
+                # 情况1：本分钟回封（收盘价≥阈值）
+                if row.close >= threshold:
+                    logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
+                    return row.trade_time
+                # 情况2：下一分钟回封（跨分钟回封）
+                if i + 1 < len(df):
+                    next_row = df.iloc[i + 1]
+                    if next_row.close >= threshold:
+                        logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
+                        return next_row.trade_time
+
+        # 开板后未回封（实盘也无法买入）
+        logger.debug(f"一字板开板后未回封，返回None")
+        return None
+
+    # ========== 保留get_first_limit_time方法（非一字板首板逻辑） ==========
+    def get_first_limit_time(self, min_df, limit_price):
+        """
+        非一字板：获取首次触板时间（分钟线high≥涨停价×容忍度）
+        :param min_df: 分钟线DF
+        :param limit_price: 涨停价
+        :return: 首次触板时间（datetime/None）
+        """
+        if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
+            min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
+
+        threshold = limit_price * self.limit_up_price_tolerance
+        hit = min_df[min_df.high >= threshold]
+
+        if hit.empty:
+            return None
+
+        first_hit_time = hit.sort_values("trade_time").trade_time.iloc[0]
+        return first_hit_time
+
+    # ========= 买卖信号生成（核心入口方法） =========
+    def generate_signal(self, trade_date, daily_df, positions):
+        """
+        生成买卖信号（回测引擎核心调用方法）
+        :param trade_date: 交易日
+        :param daily_df: 当日全市场日线DF
+        :param positions: 当前持仓：{ts_code: 持仓对象（含hold_days字段）}
+        :return: (buy_stocks, sell_signal_map)
+        """
         sell_signal_map = {}
-        for ts_code, position in positions.items():
-            stock_df = daily_df[daily_df["ts_code"] == ts_code]
-            if stock_df.empty:
+
+        # 遍历当前持仓，生成卖出信号
+        for ts_code, pos in positions.items():
+            # 筛选该股票当日日线数据
+            row = daily_df[daily_df.ts_code == ts_code]
+            # 问题9：row.empty时打印debug日志
+            if row.empty:
+                logger.debug(f"[{ts_code}-{trade_date}] 无当日日线数据，跳过卖出判断")
                 continue
-            # 获取当日行情数据
-            close_price = stock_df["close"].iloc[0]
-            pre_close = stock_df["pre_close"].iloc[0]
-            # 判断当日是否涨停
-            is_limit_up = close_price >= self.calc_limit_up_price(ts_code, pre_close) * 0.995
+            row = row.iloc[0]  # 转为Series，方便取值
 
-            # 卖出规则1：买入当日（hold_days=0）收盘未涨停，次日开盘卖
-            if position.hold_days == 0:
-                if not is_limit_up:
-                    sell_signal_map[ts_code] = "open"
-            # 卖出规则2：买入次日（hold_days=1）收盘未涨停，当日收盘卖
-            elif position.hold_days == 1:
-                if not is_limit_up:
-                    sell_signal_map[ts_code] = "close"
+            # 计算涨停价，判断是否涨停
+            limit_price = self.calc_limit_up_price(ts_code, row["pre_close"])
+            is_limit = row["close"] >= limit_price * self.limit_up_price_tolerance
 
-        # 2. 选股生成买入列表
-        buy_stocks = self.select_stocks(trade_date, daily_df, pre_close_map)
-        logger.info(f"[{trade_date}] 卖出信号：{sell_signal_map}，买入列表：{buy_stocks}")
+            # 问题10：hold_days业务逻辑+回测引擎信号接收说明
+            """
+            hold_days业务逻辑（确保回测引擎正确接收信号）：
+            1. hold_days=0：当日买入的股票（持仓天数0）
+               - 未涨停 → 生成"open"信号 → 回测引擎次日开盘执行卖出
+            2. hold_days>0：持仓超1天的股票
+               - 未涨停 → 生成"close"信号 → 回测引擎当日收盘执行卖出
+            信号传递：sell_signal_map会被回测引擎保存，次日处理"open"信号，当日处理"close"信号
+            """
+            if pos.hold_days == 0 and not is_limit:
+                sell_signal_map[ts_code] = "open"
+                logger.info(f"[{ts_code}-{trade_date}] 当日买入未涨停，生成次日开盘卖出信号")
+            elif pos.hold_days > 0 and not is_limit:
+                sell_signal_map[ts_code] = "close"
+                logger.info(f"[{ts_code}-{trade_date}] 持仓超1天未涨停，生成当日收盘卖出信号")
+
+        # 计算可用仓位，生成买入信号
+        available_pos = max(0, self.max_position_count - len(positions))
+        buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)
+
         return buy_stocks, sell_signal_map
