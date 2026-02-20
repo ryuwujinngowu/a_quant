@@ -25,6 +25,8 @@ MAIN_BOARD_LIMIT_UP_RATE = 0.098
 STAR_BOARD_LIMIT_UP_RATE = 0.198
 # ST股（备用）
 # ST_BOARD_LIMIT_UP_RATE = 0.048
+#BJ所涨停幅度
+BJ_BOARD_LIMIT_UP_RATE = 0.298
 
 # ===================== 北交所过滤配置 =====================
 BSE_STOCK_PREFIX = ('83', '87', '88')

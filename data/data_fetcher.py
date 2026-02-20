@@ -1,17 +1,18 @@
 import os
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 import pandas as pd
 import tushare as ts
 from utils.log_utils import logger
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
 API_REQUEST_INTERVAL = 0.2  # Tushare接口限流间隔（秒），统一管理
 TS_TOKEN_DEFAULT = "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3"
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
+DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
 
 
-# ===================== 通用工具函数（提取冗余逻辑，提升复用性） =====================
 def _filter_empty_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """通用工具：过滤参数字典中的空值/空字符串，避免Tushare接口报错"""
     # return {k: v for k, v in params.items() if v is not None and v != ""}
@@ -39,7 +40,7 @@ def initialize_tushare():
         raise RuntimeError(f"Tushare初始化失败：{str(e)}")
 
 
-# ===================== 核心数据获取类（精简冗余，统一逻辑） =====================
+# ===================== 核心数据获取类（仅修改fetch_stk_mins，其余完全保留） =====================
 class DataFetcher:
     """数据请求层核心类（强制返回接口所有字段+保留中文）"""
 
@@ -199,7 +200,6 @@ class DataFetcher:
         })
 
         try:
-
             kline_qfq_df = ts.pro_bar(**params)
             logger.debug(f"前复权日线数据获取，参数：{params}，行数：{len(kline_qfq_df)}")
             return kline_qfq_df
@@ -248,7 +248,7 @@ class DataFetcher:
 
     def fetch_stk_mins(
             self,
-            ts_code: str,
+            ts_code: Union[str, List[str]],
             freq: str = "1min",
             start_date: str = None,
             end_date: str = None
@@ -275,7 +275,7 @@ class DataFetcher:
 
         try:
             logger.debug(f"获取{ts_code}分钟线数据，参数：{params}")
-            time.sleep(API_REQUEST_INTERVAL)  # 接口限流
+
             mins_df = self.pro.stk_mins(**params)
 
             if mins_df.empty:
@@ -405,16 +405,18 @@ if __name__ == "__main__":
     # except Exception as e:
     #     logger.error(f"指数日线数据测试失败，错误信息：{str(e)} ❌")
 # """===================== 分钟线接口（fetch_stk_mins）专项测试用例 ====================="""
+#
+#
 # try:
 #     # 全局配置：显示所有列，方便查看返回结果
 #     pd.set_option('display.max_columns', None)
 #     pd.set_option('display.width', None)
-#
+# #
 #     logger.info("===== 测试1：有效股票+完整交易日分钟线（1min） =====")
 #     # 测试标的：000001.SZ（平安银行，确保有数据）
 #     # 测试日期：2026-01-05（你的回测日期，交易日）
 #     mins_df_1 = data_fetcher.fetch_stk_mins(
-#         ts_code="000001.SZ",
+#         ts_code="301550.SZ",
 #         freq="1min",
 #         start_date="2026-01-05 09:25:00",
 #         end_date="2026-01-05 15:00:00"
@@ -425,10 +427,11 @@ if __name__ == "__main__":
 #         logger.info(f"前5行数据：\n{mins_df_1.head()}")
 #     else:
 #         logger.error(f"❌ 有效股票分钟线返回空（可能：日期非交易日/权限不足/接口无数据）")
-#
 # except Exception as e:
 #     logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
-#     logger.info("===== 测试：获取交易日历数据 =====")
+#
+
+    # logger.info("===== 测试：获取交易日历数据 =====")
     # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
     # trade_cal_df = data_fetcher.fetch_trade_cal(
     #     start_date='20250516',

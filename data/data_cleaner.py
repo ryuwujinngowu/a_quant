@@ -497,7 +497,8 @@ class DataCleaner:
             return df
         except Exception as e:
             logger.error(f"[{ts_code}-{trade_date}] 入库后查库失败：{str(e)}")
-            return pd.DataFrame()
+        return pd.DataFrame()
+
 
     def truncate_kline_min_table(self, table_name: str = "kline_min"):
         """清空分钟线表（精简逻辑）"""
@@ -630,3 +631,37 @@ if __name__ == "__main__":
     #     logger.info("===== 指数日线数据清洗入库测试完成 ✅ =====")
     # except Exception as e:
     #     logger.error(f"指数日线数据清洗入库测试失败：{str(e)} ❌")
+    #
+    # # ====================== 新增：get_kline_min_by_stock_date 测试用例 ======================
+    # 3. 测试场景2：正常参数调用（查库→接口→入库流程）
+    # print("\n===== 测试场景2：正常参数调用 =====")
+    # test_ts_code = "301550.SZ"
+    # test_trade_date = "2026-01-16"
+    # result_df =  data_cleaner.get_kline_min_by_stock_date(
+    #     ts_code=test_ts_code,
+    #     trade_date=test_trade_date,
+    #     table_name="kline_min"
+    # )
+    # print(result_df)
+    # """测试分钟线数据（单股票+批量）清洗入库"""
+    # try:
+    #     # 初始化cleaner实例
+    #     data_cleaner = DataCleaner()
+    #     test_trade_date = "2026-02-19"  # 测试交易日（可根据实际调整）
+    #
+    #     logger.info("\n===== 测试2：批量股票分钟线拉取+入库 =====")
+    #     test_stock_list = ["000001.SZ", "000002.SZ", "002208.SZ"]  # 测试候选池
+    #     batch_result = data_cleaner.batch_get_kline_min_by_date(
+    #         stock_codes=test_stock_list,
+    #         trade_date=test_trade_date,
+    #     )
+    #     # 输出批量测试结果
+    #     valid_count = len([code for code, df in batch_result.items() if not df.empty])
+    #     logger.info(f"批量测试 - 传入股票数：{len(test_stock_list)}")
+    #     logger.info(f"批量测试 - 有效数据股票数：{valid_count}")
+    #     for ts_code, df in batch_result.items():
+    #         logger.info(f"  {ts_code}：拉取数据行数 = {len(df)}")
+    #
+    #     logger.info("\n===== 分钟线数据（单股票+批量）测试完成 ✅ =====")
+    # except Exception as e:
+    #     logger.error(f"分钟线数据测试失败：{str(e)} ❌")

@@ -1,3 +1,4 @@
+import time
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
 
@@ -5,6 +6,7 @@ import pandas as pd
 from config.config import (
     MAIN_BOARD_LIMIT_UP_RATE,
     STAR_BOARD_LIMIT_UP_RATE,
+    BJ_BOARD_LIMIT_UP_RATE,
     MAX_POSITION_COUNT,
     FILTER_BSE_STOCK,  # 新增配置：是否过滤北交所股票（True/False）
     FILTER_STAR_BOARD,  # 新增配置：是否过滤双创板（创业板/科创板，True/False）
@@ -46,7 +48,7 @@ class MultiLimitUpStrategy(BaseStrategy):
         code, exch = ts_code.split('.')
         # 北交所股票：无涨停限制
         if code.startswith(('83', '87', '88')) or exch == 'BJ':
-            return 0.0
+            return BJ_BOARD_LIMIT_UP_RATE
         # 双创板（创业板300/科创板688）：20%涨停
         if code.startswith(('300', '688')):
             return STAR_BOARD_LIMIT_UP_RATE
@@ -134,52 +136,52 @@ class MultiLimitUpStrategy(BaseStrategy):
         logger.debug(f"首次触板时间={first_hit_time}")
         return first_hit_time
 
-    # ========= 一字板回封判断（核心选股逻辑） =========
-    def check_reopen(self, min_df, limit_price, daily_row):
-        """
-        问题3：重构一字板判断逻辑（改用日K开盘价，而非9:25分数据）
-        :param min_df: 分钟线DF
-        :param limit_price: 涨停价（元）
-        :param daily_row: 该股票当日日线数据（Series）
-        :return: 回封时间（datetime/None）
-        """
-        # 数据校验：缺失核心字段直接返回None
-        if "trade_time" not in min_df.columns:
-            logger.debug("分钟线缺失trade_time字段，跳过一字板回封判断")
-            return None
-
-        # 统一trade_time为datetime类型
-        if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
-            min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
-
-        # 问题3修复：用日K开盘价判断一字板（open≥涨停价×容忍度）
-        open_price = daily_row["open"]
-        is_limit_open = open_price >= limit_price * self.limit_up_price_tolerance
-        if not is_limit_open:
-            logger.debug(
-                f"日K开盘价={open_price} < 涨停价×容忍度={limit_price * self.limit_up_price_tolerance}，非一字板")
-            return None
-
-        # 一字板前提下，判断开板回封
-        df = min_df.sort_values("trade_time").reset_index(drop=True)
-        for i, row in df.iterrows():
-            # 开板判定：分钟最低价 < 涨停价×容忍度
-            if row.low < limit_price * self.limit_up_price_tolerance:
-                logger.debug(f"[{row.trade_time}] 一字板开板，最低价={row.low}")
-                # 情况1：本分钟回封（收盘价≥涨停价×容忍度）
-                if row.close >= limit_price * self.limit_up_price_tolerance:
-                    logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
-                    return row.trade_time
-                # 情况2：下一分钟回封（跨分钟回封）
-                if i + 1 < len(df):
-                    next_row = df.iloc[i + 1]
-                    if next_row.close >= limit_price * self.limit_up_price_tolerance:
-                        logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
-                        return next_row.trade_time
-
-        # 一字板开板后未回封
-        logger.debug("一字板开板后未回封，返回None")
-        return None
+    # # ========= 一字板回封判断（核心选股逻辑） =========
+    # def check_reopen(self, min_df, limit_price, daily_row):
+    #     """
+    #     问题3：重构一字板判断逻辑（改用日K开盘价，而非9:25分数据）
+    #     :param min_df: 分钟线DF
+    #     :param limit_price: 涨停价（元）
+    #     :param daily_row: 该股票当日日线数据（Series）
+    #     :return: 回封时间（datetime/None）
+    #     """
+    #     # 数据校验：缺失核心字段直接返回None
+    #     if "trade_time" not in min_df.columns:
+    #         logger.debug("分钟线缺失trade_time字段，跳过一字板回封判断")
+    #         return None
+    #
+    #     # 统一trade_time为datetime类型
+    #     if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
+    #         min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
+    #
+    #     # 问题3修复：用日K开盘价判断一字板（open≥涨停价×容忍度）
+    #     open_price = daily_row["open"]
+    #     is_limit_open = open_price >= limit_price * self.limit_up_price_tolerance
+    #     if not is_limit_open:
+    #         logger.debug(
+    #             f"日K开盘价={open_price} < 涨停价×容忍度={limit_price * self.limit_up_price_tolerance}，非一字板")
+    #         return None
+    #
+    #     # 一字板前提下，判断开板回封
+    #     df = min_df.sort_values("trade_time").reset_index(drop=True)
+    #     for i, row in df.iterrows():
+    #         # 开板判定：分钟最低价 < 涨停价×容忍度
+    #         if row.low < limit_price * self.limit_up_price_tolerance:
+    #             logger.debug(f"[{row.trade_time}] 一字板开板，最低价={row.low}")
+    #             # 情况1：本分钟回封（收盘价≥涨停价×容忍度）
+    #             if row.close >= limit_price * self.limit_up_price_tolerance:
+    #                 logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
+    #                 return row.trade_time
+    #             # 情况2：下一分钟回封（跨分钟回封）
+    #             if i + 1 < len(df):
+    #                 next_row = df.iloc[i + 1]
+    #                 if next_row.close >= limit_price * self.limit_up_price_tolerance:
+    #                     logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
+    #                     return next_row.trade_time
+    #
+    #     # 一字板开板后未回封
+    #     logger.debug("一字板开板后未回封，返回None")
+    #     return None
 
     # ========= 核心选股逻辑（生成买入列表） =========
     def select_buy_stocks(self, trade_date, daily_df, available_pos):
@@ -216,8 +218,10 @@ class MultiLimitUpStrategy(BaseStrategy):
         min_data_dict = {}
         if candidate_count > 0:
             candidate_ts_codes = candidates.ts_code.unique()
+
+            logger.debug(f"候选股：{candidate_ts_codes}")
             min_data_dict = self._batch_get_min_df(candidate_ts_codes, trade_date)
-        logger.debug(f"[{trade_date}] 批量获取{len(min_data_dict)}只候选股分钟线完成")
+
 
         # ========== 优化2：预计算常量（减少循环内属性访问） ==========
         tolerance = self.limit_up_price_tolerance
@@ -253,8 +257,10 @@ class MultiLimitUpStrategy(BaseStrategy):
 
         # ========== 原排序逻辑不变（基于全量hits排序，保证准确性） ==========
         ordered = sorted(hits.items(), key=lambda x: x[1])
+
         buy_stocks = [x[0] for x in ordered[:available_pos]]
-        logger.info(f"{trade_date} 最终买入列表（符合实盘逻辑）：{buy_stocks}，数量={len(buy_stocks)}")
+
+        logger.info(f"{trade_date} 可用仓位:{available_pos}，最终买入列表（符合实盘逻辑）：{buy_stocks}，数量={len(buy_stocks)}")
         return buy_stocks
 
     # ========== 保留：批量+多线程获取分钟线的辅助方法（核心优化，不影响排序） ==========
@@ -285,6 +291,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 futures = {executor.submit(self._get_min_df, ts, trade_date): ts for ts in cache_misses}
                 for future in concurrent.futures.as_completed(futures):
+
                     ts = futures[future]
                     try:
                         min_df = future.result()
@@ -406,6 +413,7 @@ class MultiLimitUpStrategy(BaseStrategy):
 
         # 计算可用仓位，生成买入信号
         available_pos = max(0, self.max_position_count - len(positions))
-        buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)
 
+        buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)
+        print(buy_stocks,sell_signal_map)
         return buy_stocks, sell_signal_map

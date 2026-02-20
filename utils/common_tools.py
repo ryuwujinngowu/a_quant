@@ -142,3 +142,4 @@ def auto_add_missing_table_columns(
             logger.error(f"表{table_name}新增字段{col}失败：{e}")
 
     return success
+
