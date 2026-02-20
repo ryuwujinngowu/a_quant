@@ -11,7 +11,7 @@ from strategies.multi_limit_up_strategy import MultiLimitUpStrategy
 def main():
     # ===================== 回测参数配置 =====================
     START_DATE = "2026-01-01"  # 回测开始日期
-    END_DATE = "2026-02-05"    # 回测结束日期
+    END_DATE = "2026-01-06"    # 回测结束日期
     INIT_CAPITAL = DEFAULT_INIT_CAPITAL  # 初始本金10W元
 
     # ===================== 初始化策略与回测引擎 =====================

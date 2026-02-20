@@ -31,6 +31,11 @@ class MultiStockBacktestEngine:
         self.trade_dates = self.init_trade_cal()
         # 回测结果
         self.result = {}
+        self.account.set_backtest_info(
+            strategy_name=str(self.strategy),  # 你的策略名称
+            start_date=str(self.start_date),  # 回测开始日期（和引擎的start_date一致）
+            end_date=str(self.end_date)  # 回测结束日期（和引擎的end_date一致）
+        )
 
     def init_trade_cal(self) -> list:
         """初始化交易日历：回测前拉取、入库，返回准确的交易日列表"""
@@ -129,13 +134,22 @@ class MultiStockBacktestEngine:
                         self.account.sell(trade_date=trade_date, ts_code=ts_code, price=open_price)
             self.strategy.sell_signal_map = {}
 
-            # 4. 生成当日买卖信号
-            buy_stocks, sell_signal_map = self.strategy.generate_signal(
+            # ========== 【修改点1：第一次生成信号，仅获取买入列表，不保存卖出信号】 ==========
+            buy_stocks, _ = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
                 positions=self.account.positions
             )
-            self.strategy.sell_signal_map = sell_signal_map
+            #
+            # # 4. 生成当日买卖信号
+            # buy_stocks, sell_signal_map = self.strategy.generate_signal(
+            #     trade_date=trade_date,
+            #     daily_df=daily_df,
+            #     positions=self.account.positions
+            # )
+            # self.strategy.sell_signal_map = sell_signal_map
+            #
+
 
             # 5. 执行买入操作（按可用仓位买入）
             available_count = self.account.get_available_position_count()
@@ -163,6 +177,16 @@ class MultiStockBacktestEngine:
                     logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
             else:
                 logger.info(f"{trade_date} 无可用仓位或无买入信号，跳过买入操作")
+
+
+            # ========== 【修改点2：核心新增代码，买入完成后第二次生成信号，遍历新持仓】 ==========
+            # 仅生成卖出信号，覆盖策略的sell_signal_map，供次日执行
+            _, sell_signal_map = self.strategy.generate_signal(
+                trade_date=trade_date,
+                daily_df=daily_df,
+                positions=self.account.positions
+            )
+            self.strategy.sell_signal_map = sell_signal_map
 
             # 6. 执行当日收盘卖出信号
             for ts_code, sell_type in sell_signal_map.items():
@@ -194,10 +218,13 @@ class MultiStockBacktestEngine:
             logger.info(f"{last_date} 强制清仓：{ts_code} 卖出成功，价格：{close_price}")
         self.account.update_daily_asset(trade_date=last_date, daily_price_df=last_daily_df)
 
+
         # 计算回测指标
         net_value_df = self.account.get_net_value_df()
         trade_df = self.account.get_trade_df()
-        metrics = BacktestMetrics(net_value_df=net_value_df, init_capital=self.init_capital, trade_df=trade_df)
+        metrics = BacktestMetrics(net_value_df=net_value_df, init_capital=self.init_capital, trade_df=trade_df, strategy_name=str(self.strategy),
+            backtest_start_date=self.start_date,  # 补充回测开始日期
+            backtest_end_date=self.end_date) # 补充回测结束日期)
         self.result = metrics.calc_all_metrics()
 
         # 输出结果

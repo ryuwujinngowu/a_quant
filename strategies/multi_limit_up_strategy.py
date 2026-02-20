@@ -1,3 +1,4 @@
+from datetime import datetime
 import time
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
@@ -27,10 +28,12 @@ class MultiLimitUpStrategy(BaseStrategy):
     def __init__(self):
         """策略初始化：加载配置+初始化缓存/信号容器"""
         self.max_position_count = MAX_POSITION_COUNT  # 最大持仓数量（分仓个数）
-        self.limit_up_price_tolerance = 0.995  # 涨停价容忍度（避免价格微小误差漏判）
+        self.limit_up_price_tolerance = 0.999  # 涨停价容忍度（避免价格微小误差漏判）
         self.sell_signal_map: Dict[str, str] = {}  # 卖出信号映射：{股票代码: 卖出类型(open/close)}
         self.min_data_cache: Dict[tuple, pd.DataFrame] = {}  # 分钟线缓存：{(ts_code, trade_date): 分钟线DF}
+        self.SELL_TYPE_AFTER_BLOWUP = "open"  # 止损触发,默认开盘卖，可配置为close
         self.initialize()  # 重置信号/缓存
+
 
     def initialize(self):
         """策略重置（回测/实盘启动前执行）"""
@@ -242,7 +245,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             is_limit_open = row.open >= limit_price * tolerance
             if is_limit_open:
                 logger.debug(f"[{ts}-{trade_date}] 判定为一字板，需校验开板+回封")
-                t = self.check_reopen(min_df, limit_price, row)
+                t = self.check_reopen(min_df, limit_price, row, ts)
                 if not t:
                     logger.debug(f"[{ts}-{trade_date}] 一字板但未开板/未回封，实盘无法买入，跳过")
                     continue
@@ -306,9 +309,10 @@ class MultiLimitUpStrategy(BaseStrategy):
         return min_data_dict
 
     # ========== 核心改动2：重构check_reopen方法，强化开板校验 ==========
-    def check_reopen(self, min_df, limit_price, daily_row):
+    def check_reopen(self, min_df, limit_price, daily_row, ts):
         """
         校验一字板开板回封（严格符合实盘：必须开板且回封）
+        :param ts:
         :param min_df: 分钟线DF
         :param limit_price: 涨停价
         :param daily_row: 日线数据（NamedTuple/Series）
@@ -320,13 +324,13 @@ class MultiLimitUpStrategy(BaseStrategy):
         # 1. 再次确认一字板（双层校验，避免漏判）
         open_price = daily_row.open if hasattr(daily_row, 'open') else 0
         if open_price < threshold:
-            logger.debug(f"非一字板（开盘价={open_price} < 阈值={threshold}），跳过回封校验")
+            logger.debug(f"{ts}非一字板（开盘价={open_price} < 阈值={threshold}），跳过回封校验")
             return None
 
         # 2. 校验是否开板（核心：存在至少1分钟的最低价 < 阈值）
         min_low = min_df['low'].min()
         if min_low >= threshold:
-            logger.debug(f"一字板全天未开板（最低low={min_low} ≥ 阈值={threshold}），实盘无法买入，返回None")
+            logger.debug(f"{ts}一字板全天未开板（最低low={min_low} ≥ 阈值={threshold}），实盘无法买入，返回None")
             return None
 
         # 3. 校验开板后是否回封
@@ -334,20 +338,20 @@ class MultiLimitUpStrategy(BaseStrategy):
         for i, row in df.iterrows():
             # 开板判定：本分钟最低价 < 阈值
             if row.low < threshold:
-                logger.debug(f"[{row.trade_time}] 一字板开板（low={row.low} < 阈值={threshold}）")
+                logger.debug(f"[{ts}{row.trade_time}] 一字板开板（low={row.low} < 阈值={threshold}）")
                 # 情况1：本分钟回封（收盘价≥阈值）
                 if row.close >= threshold:
-                    logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
+                    logger.debug(f"[{ts}，{row.trade_time}] 本分钟回封，返回该时间")
                     return row.trade_time
                 # 情况2：下一分钟回封（跨分钟回封）
                 if i + 1 < len(df):
                     next_row = df.iloc[i + 1]
                     if next_row.close >= threshold:
-                        logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
+                        logger.debug(f"[{ts}，{next_row.trade_time}] 下一分钟回封，返回该时间")
                         return next_row.trade_time
 
         # 开板后未回封（实盘也无法买入）
-        logger.debug(f"一字板开板后未回封，返回None")
+        logger.debug(f"{ts},一字板开板后未回封，返回None")
         return None
 
     # ========== 保留get_first_limit_time方法（非一字板首板逻辑） ==========
@@ -369,6 +373,14 @@ class MultiLimitUpStrategy(BaseStrategy):
 
         first_hit_time = hit.sort_values("trade_time").trade_time.iloc[0]
         return first_hit_time
+
+    def _unify_date_format(self, date_str: str) -> str:
+        """统一日期格式为YYYYMMDD（和Account/Position类保持一致）"""
+        try:
+            return datetime.strptime(date_str.replace("-", ""), "%Y%m%d").strftime("%Y%m%d")
+        except Exception as e:
+            logger.error(f"策略层日期格式转换失败：{date_str}，错误：{e}")
+            return date_str
 
     # ========= 买卖信号生成（核心入口方法） =========
     def generate_signal(self, trade_date, daily_df, positions):
@@ -404,16 +416,24 @@ class MultiLimitUpStrategy(BaseStrategy):
                - 未涨停 → 生成"close"信号 → 回测引擎当日收盘执行卖出
             信号传递：sell_signal_map会被回测引擎保存，次日处理"open"信号，当日处理"close"信号
             """
-            if pos.hold_days == 0 and not is_limit:
-                sell_signal_map[ts_code] = "open"
-                logger.info(f"[{ts_code}-{trade_date}] 当日买入未涨停，生成次日开盘卖出信号")
+            # if pos.hold_days == 0 and not is_limit:
+            #     sell_signal_map[ts_code] = self.SELL_TYPE_AFTER_BLOWUP
+            #     logger.info(
+            #         f"[{ts_code}-{trade_date}] 当日买入未涨停，生成次日{self.SELL_TYPE_AFTER_BLOWUP}卖出信号（配置项控制）")
+            # elif pos.hold_days > 0 and not is_limit:
+            #     sell_signal_map[ts_code] = "close"
+            #     logger.info(f"[{ts_code}-{trade_date}] 持仓超1天未涨停，生成当日收盘卖出信号")
+            # 核心修改后的代码段（替换原有if-elif）
+            if pos.buy_date == self._unify_date_format(trade_date) and not is_limit:
+                # 仅当「当日买入（buy_date=当前交易日）」且未涨停时，生成次日炸板卖出信号
+                sell_signal_map[ts_code] = self.SELL_TYPE_AFTER_BLOWUP
+                logger.info(
+                    f"[{ts_code}-{trade_date}] 当日（{trade_date}）买入未涨停，生成次日{self.SELL_TYPE_AFTER_BLOWUP}卖出信号（配置项控制）")
             elif pos.hold_days > 0 and not is_limit:
+                # 持仓超1天（或D+1日盘中hold_days=0但非当日买入）未涨停，生成当日收盘卖出信号
                 sell_signal_map[ts_code] = "close"
-                logger.info(f"[{ts_code}-{trade_date}] 持仓超1天未涨停，生成当日收盘卖出信号")
-
+                logger.info(f"[{ts_code}-{trade_date}] 持仓超1天（买入日期：{pos.buy_date}）未涨停，生成当日收盘卖出信号")
         # 计算可用仓位，生成买入信号
         available_pos = max(0, self.max_position_count - len(positions))
-
         buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)
-        print(buy_stocks,sell_signal_map)
         return buy_stocks, sell_signal_map
