@@ -81,27 +81,6 @@ class MultiStockBacktestEngine:
             logger.error(f"{trade_date} 日线数据拉取失败，跳过当日")
             return pd.DataFrame()
 
-
-    # def get_pre_close_map(self, trade_date: str) -> dict:
-    #     """获取前一日收盘价映射（优化：用交易日历的pretrade_date，100%准确）"""
-    #     # 从交易日历获取上一个交易日，无需循环判断
-    #     pre_trade_date = data_cleaner.get_pre_trade_date(trade_date)
-    #     if not pre_trade_date:
-    #         logger.warning(f"{trade_date} 无有效上一个交易日")
-    #         return {}
-    #
-    #     pre_date_format = pre_trade_date.replace("-", "")
-    #     sql = """
-    #           SELECT ts_code, close as pre_close
-    #           FROM kline_day
-    #           WHERE trade_date = %s \
-    #           """
-    #     df = db.query(sql, params=(pre_date_format,), return_df=True)
-    #     if df is None or df.empty:
-    #         logger.warning(f"{pre_trade_date} 无前收盘价数据")
-    #         return {}
-    #     return df.set_index("ts_code")["pre_close"].to_dict()
-
     def run(self) -> dict:
         """执行回测核心流程"""
         logger.info(
@@ -119,37 +98,29 @@ class MultiStockBacktestEngine:
             if daily_df.empty:
                 logger.warning(f"{trade_date} 无有效日线数据，跳过当日")
                 continue
-            # # 2. 获取前一日收盘价映射
-            # pre_close_map = self.get_pre_close_map(trade_date)
-            # if not pre_close_map:
-            #     logger.warning(f"{trade_date} 无前收盘价数据，跳过当日")
-            #     continue
 
+            # ========== 【修改点1：修复上一日open信号执行逻辑，只删除已执行的open信号，保留close】 ==========
             # 3. 执行上一日的开盘卖出信号
+            open_sell_ts_codes = []  # 记录已执行open卖出的股票
             for ts_code, sell_type in list(self.strategy.sell_signal_map.items()):
                 if sell_type == "open":
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
                     if not stock_df.empty:
                         open_price = stock_df["open"].iloc[0]
-                        self.account.sell(trade_date=trade_date, ts_code=ts_code, price=open_price)
-            self.strategy.sell_signal_map = {}
+                        if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=open_price):
+                            open_sell_ts_codes.append(ts_code)
+            # 只删除已执行的open信号，保留close信号（用于炸板止损）
+            for ts_code in open_sell_ts_codes:
+                if ts_code in self.strategy.sell_signal_map:
+                    del self.strategy.sell_signal_map[ts_code]
+            # ❌ 移除原有的“清空整个sell_signal_map”代码 → 保留close信号
 
-            # ========== 【修改点1：第一次生成信号，仅获取买入列表，不保存卖出信号】 ==========
+            # ========== 【保留你原有逻辑：第一次生成信号，仅获取买入列表】 ==========
             buy_stocks, _ = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
                 positions=self.account.positions
             )
-            #
-            # # 4. 生成当日买卖信号
-            # buy_stocks, sell_signal_map = self.strategy.generate_signal(
-            #     trade_date=trade_date,
-            #     daily_df=daily_df,
-            #     positions=self.account.positions
-            # )
-            # self.strategy.sell_signal_map = sell_signal_map
-            #
-
 
             # 5. 执行买入操作（按可用仓位买入）
             available_count = self.account.get_available_position_count()
@@ -172,29 +143,41 @@ class MultiStockBacktestEngine:
                     if limit_up_price <= 0:
                         logger.warning(f"{trade_date} 买入操作：{ts_code} 涨停价计算无效（{limit_up_price}），跳过")
                         continue
-                    # ========== 核心补全：执行买入操作（之前漏掉了这行！） ==========
+                    # 执行买入操作
                     self.account.buy(trade_date=trade_date, ts_code=ts_code, price=limit_up_price)
                     logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
             else:
                 logger.info(f"{trade_date} 无可用仓位或无买入信号，跳过买入操作")
 
-
-            # ========== 【修改点2：核心新增代码，买入完成后第二次生成信号，遍历新持仓】 ==========
-            # 仅生成卖出信号，覆盖策略的sell_signal_map，供次日执行
+            # ========== 【保留你原有逻辑：第二次生成信号，获取卖出信号】 ==========
             _, sell_signal_map = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
                 positions=self.account.positions
             )
+
+            # ========== 【修改点2：合并上一日遗留的close信号 + 当日新生成的close信号】 ==========
+            # 先保留上一日未执行的close信号，再合并当日新生成的close信号
+            for ts_code, sell_type in self.strategy.sell_signal_map.items():
+                if sell_type == "close" and ts_code not in sell_signal_map:
+                    sell_signal_map[ts_code] = sell_type
+            # 更新策略的sell_signal_map（供次日执行）
             self.strategy.sell_signal_map = sell_signal_map
 
+            # ========== 【修改点3：执行当日收盘close信号（合并后的所有close信号）】 ==========
             # 6. 执行当日收盘卖出信号
+            close_sell_ts_codes = []  # 记录已执行close卖出的股票
             for ts_code, sell_type in sell_signal_map.items():
                 if sell_type == "close":
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
                     if not stock_df.empty:
                         close_price = stock_df["close"].iloc[0]
-                        self.account.sell(trade_date=trade_date, ts_code=ts_code, price=close_price)
+                        if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=close_price):
+                            close_sell_ts_codes.append(ts_code)
+            # 执行完close信号后，从策略的sell_signal_map中删除（避免次日重复执行）
+            for ts_code in close_sell_ts_codes:
+                if ts_code in self.strategy.sell_signal_map:
+                    del self.strategy.sell_signal_map[ts_code]
 
             # 7. 每日收盘更新账户资产
             self.account.update_daily_asset(trade_date=trade_date, daily_price_df=daily_df)
@@ -203,7 +186,7 @@ class MultiStockBacktestEngine:
         logger.info("===== 回测结束，强制清仓剩余持仓 =====")
         last_date = self.trade_dates[-1]
         last_daily_df = self.get_daily_kline_data(last_date)
-        # ========== 核心修正：将positions.keys()转为列表（静态迭代，避免字典大小变化） ==========
+        # 核心修正：将positions.keys()转为列表（静态迭代，避免字典大小变化）
         hold_stocks = list(self.account.positions.keys())  # 先转成列表，固定迭代对象
         for ts_code in hold_stocks:
             # 补充校验：防止迭代过程中该股票已被卖出（避免重复操作）
@@ -218,13 +201,17 @@ class MultiStockBacktestEngine:
             logger.info(f"{last_date} 强制清仓：{ts_code} 卖出成功，价格：{close_price}")
         self.account.update_daily_asset(trade_date=last_date, daily_price_df=last_daily_df)
 
-
         # 计算回测指标
         net_value_df = self.account.get_net_value_df()
         trade_df = self.account.get_trade_df()
-        metrics = BacktestMetrics(net_value_df=net_value_df, init_capital=self.init_capital, trade_df=trade_df, strategy_name=str(self.strategy),
-            backtest_start_date=self.start_date,  # 补充回测开始日期
-            backtest_end_date=self.end_date) # 补充回测结束日期)
+        metrics = BacktestMetrics(
+            net_value_df=net_value_df,
+            init_capital=self.init_capital,
+            trade_df=trade_df,
+            strategy_name=str(self.strategy),
+            backtest_start_date=self.start_date,
+            backtest_end_date=self.end_date
+        )
         self.result = metrics.calc_all_metrics()
 
         # 输出结果

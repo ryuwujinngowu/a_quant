@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
 API_REQUEST_INTERVAL = 0.2  # Tushare接口限流间隔（秒），统一管理
-TS_TOKEN_DEFAULT = "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3"
+TS_TOKEN_DEFAULT = "c85afd3ab0ea551098bd6a0fbac1a19540b3e8ff279d07b1a340124d"
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
 DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
 
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     #     logger.error(f"数据获取测试失败，错误信息：{str(e)} ❌")
     # """测试新增的stock_company接口"""
     # try:
-    #     # 1. 测试获取单只股票的公司信息
+        # 1. 测试获取单只股票的公司信息
     #     logger.info("===== 测试：获取单只股票（600000.SH）的公司基本信息 =====")
     #     single_company_df = data_fetcher.get_stock_company(ts_code="600000.SH")
     #     pd.set_option('display.max_columns', None)
@@ -363,7 +363,7 @@ if __name__ == "__main__":
     #     #     logger.info(f"上交所公司信息行数：{len(exchange_company_df)}")
     #     #     logger.info(f"董事长字段示例：{exchange_company_df['chairman'].dropna().head(5).tolist()}")
     #
-    #     logger.info("\n===== 所有接口测试完成 ✅ =====")
+    # #     logger.info("\n===== 所有接口测试完成 ✅ =====")
     # except Exception as e:
     #     logger.error(f"接口测试失败，错误信息：{str(e)} ❌")
     """测试新增的Kline_day接口"""

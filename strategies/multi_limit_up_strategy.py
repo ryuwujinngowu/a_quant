@@ -53,7 +53,7 @@ class MultiLimitUpStrategy(BaseStrategy):
         if code.startswith(('83', '87', '88')) or exch == 'BJ':
             return BJ_BOARD_LIMIT_UP_RATE
         # 双创板（创业板300/科创板688）：20%涨停
-        if code.startswith(('300', '688')):
+        if code.startswith(('30', '688')):
             return STAR_BOARD_LIMIT_UP_RATE
         # 主板（沪市60/深市00）：10%涨停
         return MAIN_BOARD_LIMIT_UP_RATE
@@ -294,7 +294,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 futures = {executor.submit(self._get_min_df, ts, trade_date): ts for ts in cache_misses}
                 for future in concurrent.futures.as_completed(futures):
-
+                    time.sleep(0.5)
                     ts = futures[future]
                     try:
                         min_df = future.result()
@@ -429,10 +429,10 @@ class MultiLimitUpStrategy(BaseStrategy):
                 sell_signal_map[ts_code] = self.SELL_TYPE_AFTER_BLOWUP
                 logger.info(
                     f"[{ts_code}-{trade_date}] 当日（{trade_date}）买入未涨停，生成次日{self.SELL_TYPE_AFTER_BLOWUP}卖出信号（配置项控制）")
-            elif pos.hold_days > 0 and not is_limit:
+            elif pos.buy_date <= self._unify_date_format(trade_date) and not is_limit:
                 # 持仓超1天（或D+1日盘中hold_days=0但非当日买入）未涨停，生成当日收盘卖出信号
                 sell_signal_map[ts_code] = "close"
-                logger.info(f"[{ts_code}-{trade_date}] 持仓超1天（买入日期：{pos.buy_date}）未涨停，生成当日收盘卖出信号")
+                logger.info(f"[{ts_code}-{trade_date}] 持仓超{pos.hold_days}天（买入日期：{pos.buy_date}）未涨停，生成当日收盘卖出信号")
         # 计算可用仓位，生成买入信号
         available_pos = max(0, self.max_position_count - len(positions))
         buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)
