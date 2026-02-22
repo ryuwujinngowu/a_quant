@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
 from config.config import MAX_POSITION_COUNT
