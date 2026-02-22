@@ -89,9 +89,8 @@ class MultiStockBacktestEngine:
             f"===== 开始回测，初始本金：{self.init_capital}元，回测时间段：{self.start_date} 至 {self.end_date} =====")
         # 初始化策略
         self.strategy.initialize()
-
         # 回测前清空临时表
-        # data_cleaner.truncate_kline_min_table()
+        data_cleaner.truncate_kline_min_table()
 
         # 按交易日循环执行（仅交易日，无休市日）
         for idx, trade_date in enumerate(self.trade_dates):
@@ -225,8 +224,8 @@ class MultiStockBacktestEngine:
         logger.info("=" * 60)
 
         # 回测结束清空临时表
-        # data_cleaner.truncate_kline_min_table()
-        # data_cleaner.truncate_trade_cal_table()
+        data_cleaner.truncate_kline_min_table()
+        data_cleaner.truncate_trade_cal_table()
 
         # 附加详细数据
         self.result["net_value_df"] = net_value_df
