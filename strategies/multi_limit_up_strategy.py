@@ -2,6 +2,7 @@ from datetime import datetime
 import time
 from typing import List, Dict, Tuple, Optional
 import pandas as pd
+from strategies.base_strategy import BaseStrategy
 
 # 导入核心配置：涨停率、最大持仓数 + 新增可配置的股票类型过滤开关
 from config.config import (
@@ -27,12 +28,15 @@ class MultiLimitUpStrategy(BaseStrategy):
 
     def __init__(self):
         """策略初始化：加载配置+初始化缓存/信号容器"""
+        super().__init__()
         self.max_position_count = MAX_POSITION_COUNT  # 最大持仓数量（分仓个数）
         self.limit_up_price_tolerance = 0.999  # 涨停价容忍度（避免价格微小误差漏判）
         self.sell_signal_map: Dict[str, str] = {}  # 卖出信号映射：{股票代码: 卖出类型(open/close)}
         self.min_data_cache: Dict[tuple, pd.DataFrame] = {}  # 分钟线缓存：{(ts_code, trade_date): 分钟线DF}
         self.SELL_TYPE_AFTER_BLOWUP = "open"  # 止损触发,默认开盘卖，可配置为close
+        self.strategy_name = f"多标的涨停打板策略(持仓直到断板,炸板次日{self.SELL_TYPE_AFTER_BLOWUP}止损)"
         self.initialize()  # 重置信号/缓存
+
 
 
     def initialize(self):
@@ -263,7 +267,7 @@ class MultiLimitUpStrategy(BaseStrategy):
 
         buy_stocks = [x[0] for x in ordered[:available_pos]]
 
-        logger.info(f"{trade_date} 可用仓位:{available_pos}，最终买入列表（符合实盘逻辑）：{buy_stocks}，数量={len(buy_stocks)}")
+        # logger.info(f"{trade_date} 可用仓位:{available_pos}，最终买入列表（符合实盘逻辑）：{buy_stocks}，数量={len(buy_stocks)}")
         return buy_stocks
 
     # ========== 保留：批量+多线程获取分钟线的辅助方法（核心优化，不影响排序） ==========
@@ -294,7 +298,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 futures = {executor.submit(self._get_min_df, ts, trade_date): ts for ts in cache_misses}
                 for future in concurrent.futures.as_completed(futures):
-                    time.sleep(0.5)
+                    # time.sleep(1)
                     ts = futures[future]
                     try:
                         min_df = future.result()
@@ -432,7 +436,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             elif pos.buy_date <= self._unify_date_format(trade_date) and not is_limit:
                 # 持仓超1天（或D+1日盘中hold_days=0但非当日买入）未涨停，生成当日收盘卖出信号
                 sell_signal_map[ts_code] = "close"
-                logger.info(f"[{ts_code}-{trade_date}] 持仓超{pos.hold_days}天（买入日期：{pos.buy_date}）未涨停，生成当日收盘卖出信号")
+            logger.info(f"[{ts_code}-{trade_date}] 持仓超{pos.hold_days}天（买入日期：{pos.buy_date}）未涨停，生成止损卖出信号")
         # 计算可用仓位，生成买入信号
         available_pos = max(0, self.max_position_count - len(positions))
         buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)

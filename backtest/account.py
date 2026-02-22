@@ -75,7 +75,7 @@ class Position:
 class Account:
     """多标的分仓账户管理类"""
 
-    def __init__(self, init_capital: float, max_position_count: int = MAX_POSITION_COUNT):
+    def __init__(self, init_capital: float, max_position_count: int = MAX_POSITION_COUNT, ):
         # 账户核心资产
         self.init_capital = init_capital
         self.available_cash = init_capital  # 可用资金
@@ -174,9 +174,9 @@ class Account:
         })
 
         # ========== 核心：结构化打印当日盈亏日志 ==========
-        logger.info(f"\n{'='*60}")
+        logger.info(f"{'='*40}")
         logger.info(f"【{trade_date} 每日结算盈亏报告】")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'='*40}")
         # 整体盈亏
         logger.info(f"📊 账户整体情况：")
         logger.info(f"  当日盈亏：{round(daily_pnl, 2)} 元 | 当日收益率：{round(daily_pnl_rate, 2)} %")
@@ -185,7 +185,7 @@ class Account:
         logger.info(f"  持仓总市值：{round(total_position_value, 2)} 元 | 持仓标的数量：{len(self.positions)} 只")
 
         # 持仓标的盈亏明细
-        logger.info(f"\n📈 持仓标的盈亏明细：")
+        logger.info(f"📈 持仓标的盈亏明细：")
         if position_pnl_detail:
             for ts_code, pnl_info in position_pnl_detail.items():
                 logger.info(
@@ -195,7 +195,7 @@ class Account:
             logger.info(f"  当日无持仓")
 
         # 当日卖出标的盈亏明细
-        logger.info(f"\n💸 当日卖出标的盈亏明细：")
+        logger.info(f"💸 当日卖出标的盈亏明细：")
         current_sold_pnl = self.daily_sold_pnl.get(trade_date, {})
         if current_sold_pnl:
             total_sold_pnl = sum(current_sold_pnl.values())
@@ -204,7 +204,7 @@ class Account:
             logger.info(f"  👉 当日卖出总盈亏：{round(total_sold_pnl, 2)} 元")
         else:
             logger.info(f"  当日无卖出操作")
-        logger.info(f"{'='*60}\n")
+        logger.info(f"{'='*60}")
 
         # 6. 更新前一日总资产（用于下一日盈亏计算）
         self.prev_total_asset = self.total_asset

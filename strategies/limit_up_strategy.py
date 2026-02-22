@@ -13,6 +13,7 @@ class LimitUpHoldStrategy(BaseStrategy):
     3. 无固定持有天数，只要每天都涨停就一直持有
     """
     def __init__(self, stop_loss_rate: float = 0.08):
+        super().__init__()
         self.stop_loss_rate = stop_loss_rate
         # 持仓状态
         self.is_holding = False

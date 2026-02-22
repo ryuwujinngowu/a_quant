@@ -1,27 +1,84 @@
+# strategies/base_strategy.py
+"""
+所有策略的抽象基类（Base Strategy）
+核心作用：
+1. 定义引擎与策略之间的统一接口，实现引擎复用、多策略解耦
+2. 强制所有自定义策略实现核心方法，避免运行时缺方法报错
+3. 统一管理策略通用属性（如信号映射、策略名称）
+"""
 from abc import ABC, abstractmethod
-
+from typing import List, Dict, Tuple, Optional
 import pandas as pd
 
 
 class BaseStrategy(ABC):
     """
-    策略基类：所有策略必须继承该类，实现2个核心方法
-    统一接口规范，回测引擎仅依赖该基类，不耦合具体策略实现
+    策略抽象基类：所有自定义策略必须继承此类并实现所有抽象方法
+    约定引擎调用的核心接口，确保不同策略与引擎的兼容性
     """
 
+    def __init__(self):
+        # ========== 策略通用属性（所有子类共享，无需重复定义） ==========
+        # 卖出信号映射：{ts_code: sell_type}，sell_type = "open"/"close"
+        self.sell_signal_map: Dict[str, str] = {}
+        # 策略名称（子类必须重写，用于回测指标/日志标识）
+        # self.strategy_name: str = "UnnamedStrategy"
+        # 策略参数（可选，子类可扩展，用于回测结果记录参数）
+        self.strategy_params: Dict[str, any] = {}
+
+    # ========== 核心抽象方法（子类必须实现） ==========
     @abstractmethod
-    def initialize(self):
+    def initialize(self) -> None:
         """
-        策略初始化方法
-        用途：重置持仓状态、初始化参数，每次回测前必须调用
+        策略初始化方法（引擎回测启动前调用）
+        用途：
+        1. 清空信号缓存（如sell_signal_map）
+        2. 重置策略内部状态（如持仓天数、指标缓存）
+        3. 初始化策略参数
         """
         pass
 
     @abstractmethod
-    def generate_signal(self, row: pd.Series) -> int:
+    def generate_signal(
+            self,
+            trade_date: str,
+            daily_df: pd.DataFrame,
+            positions: Dict[str, any]
+    ) -> Tuple[List[str], Dict[str, str]]:
         """
-        逐行生成买卖信号（策略核心逻辑）
-        :param row: 单日K线+特征数据
-        :return: 信号：1=买入，-1=卖出，0=持仓/空仓无操作
+        生成买卖信号（引擎每日循环调用的核心方法）
+        :param trade_date: 当前交易日（格式：YYYY-MM-DD）
+        :param daily_df: 当日全市场日线数据（columns包含ts_code/open/high/low/close等）
+        :param positions: 当前账户持仓字典（{ts_code: 持仓对象/持仓信息}）
+        :return: 
+            - buy_stocks: 当日买入股票列表（[ts_code1, ts_code2, ...]）
+            - sell_signal_map: 当日卖出信号字典（{ts_code: sell_type}）
         """
         pass
+
+    @abstractmethod
+    def calc_limit_up_price(self, ts_code: str, pre_close: float) -> float:
+        """
+        计算标的价格（引擎买入操作时调用）
+        - 涨停策略：计算涨停价
+        - 均线策略/价值策略：可返回目标买入价（如收盘价、均价等）
+        :param ts_code: 股票代码（如600000.SH）
+        :param pre_close: 前一日收盘价
+        :return: 目标买入价格（float）
+        """
+        pass
+
+    # ========== 可选扩展方法（子类按需重写） ==========
+    def get_strategy_info(self) -> Dict[str, any]:
+        """
+        获取策略完整信息（用于回测结果记录）
+        :return: 包含名称、参数的字典
+        """
+        return {
+            "strategy_name": self.strategy_name,
+            "strategy_params": self.strategy_params
+        }
+
+    def clear_signal(self) -> None:
+        """清空卖出信号（通用方法，子类可直接调用）"""
+        self.sell_signal_map.clear()

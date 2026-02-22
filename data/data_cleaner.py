@@ -1,3 +1,4 @@
+import time
 from typing import Optional, List, Dict
 import numpy as np
 import pandas as pd
@@ -475,6 +476,7 @@ class DataCleaner:
 
         # 第三步：数据库无数据，调用接口拉取
         logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，调用接口拉取")
+        time.sleep(0.5)
         raw_df = data_fetcher.fetch_stk_mins(
             ts_code=ts_code,
             freq="1min",

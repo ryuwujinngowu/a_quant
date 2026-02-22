@@ -59,7 +59,7 @@ class LogUtils:
     def _init_logger(self):
         """初始化日志器（极简逻辑+带时间文件名）"""
         # 1. 基础配置（仅保留核心参数）
-        log_name = os.getenv("LOG_NAME", "quant_default")
+        log_name = os.getenv("LOG_NAME", "a_quant")
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
         # 核心：获取带日期的日志文件路径
         log_file_path = self._get_log_file_path()

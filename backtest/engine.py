@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-
+from strategies.base_strategy import BaseStrategy
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
 from config.config import MAX_POSITION_COUNT
@@ -15,8 +15,9 @@ class MultiStockBacktestEngine:
     """全市场多标的回测引擎（性能优化版：缓存+预加载+索引优化）"""
 
     def __init__(
+
             self,
-            strategy: MultiLimitUpStrategy,
+            strategy: BaseStrategy,
             init_capital: float,
             start_date: str,
             end_date: str
@@ -32,10 +33,11 @@ class MultiStockBacktestEngine:
         # 回测结果
         self.result = {}
         self.account.set_backtest_info(
-            strategy_name=str(self.strategy),  # 你的策略名称
+            strategy_name=self.strategy.strategy_name,  # 你的策略名称
             start_date=str(self.start_date),  # 回测开始日期（和引擎的start_date一致）
             end_date=str(self.end_date)  # 回测结束日期（和引擎的end_date一致）
         )
+
 
     def init_trade_cal(self) -> list:
         """初始化交易日历：回测前拉取、入库，返回准确的交易日列表"""
@@ -87,8 +89,9 @@ class MultiStockBacktestEngine:
             f"===== 开始回测，初始本金：{self.init_capital}元，回测时间段：{self.start_date} 至 {self.end_date} =====")
         # 初始化策略
         self.strategy.initialize()
+
         # 回测前清空临时表
-        data_cleaner.truncate_kline_min_table()
+        # data_cleaner.truncate_kline_min_table()
 
         # 按交易日循环执行（仅交易日，无休市日）
         for idx, trade_date in enumerate(self.trade_dates):
@@ -125,7 +128,7 @@ class MultiStockBacktestEngine:
             # 5. 执行买入操作（按可用仓位买入）
             available_count = self.account.get_available_position_count()
             if available_count > 0 and buy_stocks:
-                logger.info(f"{trade_date} 开始执行买入操作 | 可用仓位：{available_count} | 买入列表：{buy_stocks}")
+                logger.info(f"[{trade_date}] 开始执行买入操作 | 可用仓位：{available_count} | 买入列表：{buy_stocks}")
                 for ts_code in buy_stocks[:available_count]:
                     # 1. 筛选当前股票的当日日线数据
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
@@ -145,7 +148,7 @@ class MultiStockBacktestEngine:
                         continue
                     # 执行买入操作
                     self.account.buy(trade_date=trade_date, ts_code=ts_code, price=limit_up_price)
-                    logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
+                    # logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
             else:
                 logger.info(f"{trade_date} 无可用仓位或无买入信号，跳过买入操作")
 
@@ -208,7 +211,7 @@ class MultiStockBacktestEngine:
             net_value_df=net_value_df,
             init_capital=self.init_capital,
             trade_df=trade_df,
-            strategy_name=str(self.strategy),
+            strategy_name=self.strategy.strategy_name,
             backtest_start_date=self.start_date,
             backtest_end_date=self.end_date
         )
@@ -222,8 +225,8 @@ class MultiStockBacktestEngine:
         logger.info("=" * 60)
 
         # 回测结束清空临时表
-        data_cleaner.truncate_kline_min_table()
-        data_cleaner.truncate_trade_cal_table()
+        # data_cleaner.truncate_kline_min_table()
+        # data_cleaner.truncate_trade_cal_table()
 
         # 附加详细数据
         self.result["net_value_df"] = net_value_df
