@@ -7,8 +7,8 @@ from utils.log_utils import logger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
-API_REQUEST_INTERVAL = 1 # Tushare接口限流间隔（秒），统一管理
-TS_TOKEN_DEFAULT = "c85afd3ab0ea551098bd6a0fbac1a19540b3e8ff279d07b1a340124d"
+API_REQUEST_INTERVAL = 0.2  # Tushare接口限流间隔（秒），统一管理
+TS_TOKEN_DEFAULT = "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3"
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
 DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
 
@@ -178,18 +178,6 @@ class DataFetcher:
             adj: Optional[str] = None  # 兼容原参数，实际固定为qfq
     ) -> pd.DataFrame:
         """
-        token好像和其他的不一样
-        获取A股前复权日K线数据（pro_bar接口）
-        接口文档：https://tushare.pro/document/2?doc_id=109
-
-        Args:
-            ts_code: 股票代码（如600000.SH）
-            trade_date: 兼容原参数，接口未使用
-            start_date: 开始日期（YYYYMMDD）
-            end_date: 结束日期（YYYYMMDD）
-            adj: 复权类型（兼容原参数，实际固定为前复权qfq）
-
-        Returns:
             前复权日K线DataFrame（空数据返回空DataFrame）
         """
         params = _filter_empty_params({
@@ -198,7 +186,8 @@ class DataFetcher:
             "end_date": end_date,
             "adj": "qfq"  # 固定前复权，保持原功能不变
         })
-
+        TUSHARE_TOKEN = TS_TOKEN_DEFAULT
+        ts.set_token(TUSHARE_TOKEN)  # 初始化token
         try:
             kline_qfq_df = ts.pro_bar(**params)
             logger.debug(f"前复权日线数据获取，参数：{params}，行数：{len(kline_qfq_df)}")
@@ -275,7 +264,7 @@ class DataFetcher:
 
         try:
             logger.debug(f"获取{ts_code}分钟线数据，参数：{params}")
-            time.sleep(API_REQUEST_INTERVAL)
+
             mins_df = self.pro.stk_mins(**params)
 
             if mins_df.empty:
@@ -446,3 +435,23 @@ if __name__ == "__main__":
     # else:
     #     logger.warning("⚠️  未获取到交易日历数据！")
     # logger.info("\n===== 获取交易日历数据测试完成 ✅ =====\n")
+
+    # TUSHARE_TOKEN = "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3"
+    # ts.set_token(TUSHARE_TOKEN)  # 初始化token
+
+    # 2. 调用接口获取数据（示例：浦发银行 2025年1月前复权日线）
+    # df = data_fetcher.fetch_kline_day_qfq(
+    #     ts_code="600000.SH",  # 股票代码
+    #     start_date="20250101",# 开始日期
+    #     end_date="20260223"   # 结束日期
+    # )
+    #
+    # # 3. 打印结果看看
+    # if not df.empty:
+    #     print("\n===== 获取到的前复权日线数据 =====")
+    #     print(f"数据形状：{df.shape}")  # 行数×列数
+    #     print("\n前5行数据：")
+    #     print(df.head())
+    #     print("\n数据字段：", df.columns.tolist())
+    # else:
+    #     print("未获取到数据，请检查Token/股票代码/日期是否正确")
