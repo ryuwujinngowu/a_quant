@@ -85,9 +85,7 @@ class TechnicalFeatures:
         if isinstance(ma_days, int):
             ma_days = [ma_days]  # 转为列表统一处理
         max_ma_day = max(ma_days)  # 提取最大均线天数
-        # 3. 往前倒推max_ma_day天，得到新的起始日期
         new_start_date_dt = start_date_dt - datetime.timedelta(days=max_ma_day*2)
-        # 转回YYYYMMDD格式的字符串，适配_get_qfq_kline_data的参数要求
         new_start_date = new_start_date_dt.strftime("%Y%m%d")
         # 校验均线天数合理性
         invalid_days = [d for d in ma_days if d < 1]
