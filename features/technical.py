@@ -4,8 +4,8 @@ import logging
 from utils.db_utils import db
 from data.data_cleaner import data_cleaner  # 导入数据清洗入库实例
 from utils.log_utils import logger
+import datetime
 
-# 量化行业通用均线天数（建议优先使用这些口径）
 COMMON_MA_DAYS = [5, 10, 20, 60, 120, 250]  # 5日(周)、10日(双周)、20日(月)、60日(季)、120日(半年)、250日(年)
 
 
@@ -79,9 +79,16 @@ class TechnicalFeatures:
         :param ma_days: 均线天数，支持单个（如5）或列表（如[5,10,20]），默认行业通用口径
         :return: 包含均线的DataFrame（trade_date/ts_code/close/ma5/ma10...）
         """
-        # 1. 参数处理
+        start_date_dt = datetime.datetime.strptime(start_date, "%Y%m%d").date()
+
+        # 2. 处理ma_days，确保为列表并取最大值
         if isinstance(ma_days, int):
             ma_days = [ma_days]  # 转为列表统一处理
+        max_ma_day = max(ma_days)  # 提取最大均线天数
+        # 3. 往前倒推max_ma_day天，得到新的起始日期
+        new_start_date_dt = start_date_dt - datetime.timedelta(days=max_ma_day*2)
+        # 转回YYYYMMDD格式的字符串，适配_get_qfq_kline_data的参数要求
+        new_start_date = new_start_date_dt.strftime("%Y%m%d")
         # 校验均线天数合理性
         invalid_days = [d for d in ma_days if d < 1]
         if invalid_days:
@@ -89,7 +96,7 @@ class TechnicalFeatures:
             return pd.DataFrame()
 
         # 2. 获取前复权K线数据
-        kline_df = self._get_qfq_kline_data(ts_code, start_date, end_date)
+        kline_df = self._get_qfq_kline_data(ts_code, new_start_date, end_date)
         if kline_df.empty:
             return pd.DataFrame()
 
@@ -105,51 +112,24 @@ class TechnicalFeatures:
         # 4. 整理返回字段
         return_cols = ["ts_code", "trade_date", "close"] + [f"ma{day}" for day in ma_days]
         result_df = result_df[return_cols].sort_values("trade_date", ascending=True)
+        # ========== 4. 筛选：仅保留用户原始日期范围的数据 ==========
+        # 先把trade_date转成日期对象，方便筛选
+        result_df['trade_date_dt'] = pd.to_datetime(result_df['trade_date'], format="%Y%m%d").dt.date
+        # 筛选条件：trade_date在原始start_date和end_date之间（包含边界）
+        if not end_date:
+            end_date =  datetime.datetime.strptime(pd.Timestamp.now().strftime("%Y%m%d"), "%Y%m%d").date()
+        else:
+            end_date =  datetime.datetime.strptime(end_date, "%Y%m%d").date()
+        filter_mask = (result_df['trade_date_dt'] >= start_date_dt) & \
+                      (result_df['trade_date_dt'] <= end_date)
+        result_df = result_df[filter_mask].drop(columns=['trade_date_dt'])  # 删除临时列
 
+        # ========== 5. 整理返回格式 ==========
+        return_cols = ["ts_code", "trade_date", "close"] + [f"ma{day}" for day in ma_days]
+        result_df = result_df[return_cols].sort_values("trade_date", ascending=True).reset_index(drop=True)
         self.logger.info(f"{ts_code}均线计算完成，覆盖天数：{ma_days}，数据行数：{len(result_df)}")
         return result_df
 
-    def calculate_ema(
-            self,
-            ts_code: str,
-            start_date: str,
-            end_date: Optional[str] = None,
-            ema_days: Union[int, List[int]] = [5, 10, 20]
-    ) -> pd.DataFrame:
-        """
-        计算指数移动平均线（EMA）- 量化行业补充口径（更侧重近期数据）
-        :param ts_code: 股票代码
-        :param start_date: 开始日期（YYYYMMDD）
-        :param end_date: 结束日期（YYYYMMDD），不传默认到当日
-        :param ema_days: EMA天数，默认5/10/20日（短期策略常用）
-        :return: 包含EMA的DataFrame（trade_date/ts_code/close/ema5/ema10...）
-        """
-        # 1. 参数处理
-        if isinstance(ema_days, int):
-            ema_days = [ema_days]
-        invalid_days = [d for d in ema_days if d < 1]
-        if invalid_days:
-            self.logger.error(f"无效EMA天数：{invalid_days}，天数需≥1")
-            return pd.DataFrame()
-
-        # 2. 获取前复权K线数据
-        kline_df = self._get_qfq_kline_data(ts_code, start_date, end_date)
-        if kline_df.empty:
-            return pd.DataFrame()
-
-        # 3. 计算指数移动平均（行业标准：adjust=False，与同花顺/通达信对齐）
-        result_df = kline_df.copy()
-        for day in ema_days:
-            col_name = f"ema{day}"
-            result_df[col_name] = result_df["close"].ewm(span=day, adjust=False, min_periods=1).mean()
-            result_df[col_name] = result_df[col_name].round(4)
-
-        # 4. 整理返回字段
-        return_cols = ["ts_code", "trade_date", "close"] + [f"ema{day}" for day in ema_days]
-        result_df = result_df[return_cols].sort_values("trade_date", ascending=True)
-
-        self.logger.info(f"{ts_code}EMA计算完成，覆盖天数：{ema_days}，数据行数：{len(result_df)}")
-        return result_df
 
 
 # 全局实例（供策略模块调用）
@@ -160,9 +140,9 @@ if __name__ == "__main__":
     """均线计算测试（行业通用口径）"""
     # 1. 测试简单移动平均（MA）
     ma_result = technical_features.calculate_ma(
-        ts_code="300480.SZ",
-        start_date="20260101",
-        ma_days=[5, 10, 20]  # 测试5/10/20日均线
+        ts_code="300308.SZ",
+        start_date="20230105",
+        ma_days=[5, 10, 20, 60]  # 测试5/10/20日均线
     )
     if not ma_result.empty:
         logger.info("=====前复权均线数据（MA5/MA10/MA20） =====")
