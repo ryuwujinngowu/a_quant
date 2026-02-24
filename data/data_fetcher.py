@@ -160,7 +160,7 @@ class DataFetcher:
             "start_date": start_date,
             "end_date": end_date
         })
-        logger.info(f"[DEBUG] 调用行情接口: {trade_date}")
+        logger.DEBUG(f" 调用行情接口: {trade_date}")
         try:
             kline_df = self.pro.daily(**params)
             logger.debug(f"日线数据获取，参数：{params}，行数：{len(kline_df)}")
