@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Tuple
 from typing import List, Dict, Optional
 from utils.db_utils import db  # 确保db工具已导入
+import threading
 from utils.log_utils import logger
+
+
+# Token 统计文件配置（默认统计到 data 目录，可根据需要调整）
+TOKEN_USAGE_FILE = None
+TOKEN_LOCK = threading.Lock()
+
 
 # 增量更新配置（可统一维护）
 UPDATE_RECORD_FILE = Path(__file__).parent.parent / "data" / "update_record.json"
@@ -143,5 +150,118 @@ def auto_add_missing_table_columns(
 
     return success
 
+
+
+
+def init_token_file(file_path: str, force: bool = False):
+    """
+    初始化Token统计文件
+    :param file_path: Token统计文件的绝对/相对路径
+    :param force: 是否强制覆盖现有文件（默认False）
+    """
+    global TOKEN_USAGE_FILE
+    TOKEN_USAGE_FILE = os.path.abspath(file_path)
+
+    if force or not os.path.exists(TOKEN_USAGE_FILE):
+        try:
+            init_data = {
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "call_count": 0
+            }
+            # 确保文件所在目录存在
+            os.makedirs(os.path.dirname(TOKEN_USAGE_FILE), exist_ok=True)
+
+            with open(TOKEN_USAGE_FILE, "w", encoding="utf-8") as f:
+                json.dump(init_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"初始化Token统计文件成功，路径：{TOKEN_USAGE_FILE}，初始数据：{init_data}")
+        except Exception as e:
+            logger.error(f"初始化Token统计文件失败：{str(e)}，路径：{TOKEN_USAGE_FILE}")
+            raise e
+
+
+def update_token_usage(prompt_tokens: int, completion_tokens: int, total_tokens: int, token_stat: bool = True):
+    """
+    累加Token消耗到文件
+    :param prompt_tokens: 本次输入Token数
+    :param completion_tokens: 本次输出Token数
+    :param total_tokens: 本次总Token数
+    :param token_stat: 是否开启Token统计（开关控制）
+    """
+    if not token_stat:
+        logger.warning("Token统计功能已关闭，跳过累加")
+        return
+    if not TOKEN_USAGE_FILE:
+        raise ValueError("Token统计文件未初始化，请先调用init_token_file设置文件路径")
+    with TOKEN_LOCK:
+        try:
+            with open(TOKEN_USAGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            old_prompt = data["total_prompt_tokens"]
+            old_completion = data["total_completion_tokens"]
+            old_total = data["total_tokens"]
+            old_count = data["call_count"]
+
+            new_prompt = old_prompt + prompt_tokens
+            new_completion = old_completion + completion_tokens
+            new_total = old_total + total_tokens
+            new_count = old_count + 1
+
+            # 写入新数据
+            data.update({
+                "total_prompt_tokens": new_prompt,
+                "total_completion_tokens": new_completion,
+                "total_tokens": new_total,
+                "call_count": new_count
+            })
+            with open(TOKEN_USAGE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Token统计文件格式错误，重新初始化（原文件已备份）：{str(e)}")
+            # 备份错误文件
+            if os.path.exists(TOKEN_USAGE_FILE):
+                bak_path = f"{TOKEN_USAGE_FILE}.bak"
+                os.rename(TOKEN_USAGE_FILE, bak_path)
+                logger.info(f"错误文件已备份至：{bak_path}")
+            # 重新初始化并累加本次数据
+            init_token_file(TOKEN_USAGE_FILE, force=True)
+            update_token_usage(prompt_tokens, completion_tokens, total_tokens, token_stat)
+        except Exception as e:
+            logger.error(f"Token累加失败：{str(e)}")
+            raise e
+
+
+def get_token_usage(file_path: str) -> dict:
+    """
+    获取Token统计文件的累计数据
+    :param file_path: Token统计文件路径
+    :return: 累计统计数据
+    """
+    file_path = os.path.abspath(file_path)
+    if not os.path.exists(file_path):
+        logger.warning(f"Token统计文件不存在：{file_path}，返回初始数据")
+        return {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "call_count": 0
+        }
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        logger.error(f"读取Token统计文件失败：{str(e)}")
+        return {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "call_count": 0
+        }
 
 
