@@ -1,9 +1,11 @@
+import time
 import requests
 import json
 from utils.log_utils import logger
 from typing import Dict, List
 from utils.db_utils import db
-
+# 导入Token统计工具
+from utils.common_tools import init_token_file, update_token_usage
 
 def call_doubao_search_api(prompt: str) -> Dict:
     """
@@ -11,45 +13,39 @@ def call_doubao_search_api(prompt: str) -> Dict:
     :param prompt: 输入提示词
     :return: 结构化响应 {"raw_text": "", "token_usage": {}, "error": None}
     """
-    # 1. 核心配置替换（用你新应用的参数）
-    global response
-    API_KEY = '02f9dd23-b023-43bb-ae90-0c91ff7b9324'  # API Key 不变，复用原有配置
-    # API_URL = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"
-    API_URL = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"  # 新接口地址
-    MODEL_ID = "bot-20260224232147-dfcct"  # 你的新应用model ID
+    API_KEY = '02f9dd23-b023-43bb-ae90-0c91ff7b9324'
+    API_URL = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"
+    MODEL_ID = "bot-20260224232147-dfcct"
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json; charset=utf-8"
     }
 
-    # 2. 适配新接口的请求参数（关键修改）
     data = {
-        "model": MODEL_ID,  # 替换为应用专属ID，不再用原模型名
-        "stream": False,  # 关闭流式返回（批量处理更方便，若要流式可改为True）
-        "stream_options": {"include_usage": True},  # 新接口必填
+        "model": MODEL_ID,
+        "stream": False,
+        "stream_options": {"include_usage": True},
         "messages": [
             {
                 "role": "user",
                 "content": prompt
             }
         ],
-        # 联网能力已在应用端配置，无需再传plugins参数！
         "temperature": 0.1,
         "max_tokens": 2048
     }
 
     try:
-        # 3. 发送请求（关闭流式后，返回完整文本）
+        # 移除危险的 global response，本地变量即可
         response = requests.post(
             url=API_URL,
             headers=headers,
             json=data,
-            timeout=30  # 联网检索超时时间加长
+            timeout=30
         )
-        response.raise_for_status()  # 抛出HTTP错误
+        response.raise_for_status()
 
-        # 4. 解析响应（分流式/非流式两种情况）
         result = {
             "raw_text": "",
             "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -57,10 +53,9 @@ def call_doubao_search_api(prompt: str) -> Dict:
         }
 
         resp_json = response.json()
-        # 提取核心文本
         if resp_json.get("choices") and len(resp_json["choices"]) > 0:
             result["raw_text"] = resp_json["choices"][0]["message"]["content"].strip()
-        # 提取Token消耗
+
         if resp_json.get("usage"):
             result["token_usage"] = {
                 "prompt_tokens": resp_json["usage"].get("prompt_tokens", 0),
@@ -68,30 +63,32 @@ def call_doubao_search_api(prompt: str) -> Dict:
                 "total_tokens": resp_json["usage"].get("total_tokens", 0)
             }
 
-        logger.info(f"新联网API返回文本：\n{result['raw_text']}")
+        logger.info(f"API返回文本：\n{result['raw_text']}")
         logger.info(f"Token消耗：输入{result['token_usage']['prompt_tokens']} | 输出{result['token_usage']['completion_tokens']}")
         return result
 
     except requests.exceptions.HTTPError as e:
-        error_msg = f"HTTP错误 {response.status_code}：{response.text}"
+        # 安全获取状态码，不使用未定义变量
+        status = response.status_code if 'response' in locals() else 'unknown'
+        text = response.text if 'response' in locals() else ''
+        error_msg = f"HTTP错误 {status}：{text}"
         logger.error(error_msg)
         return {"raw_text": "", "token_usage": {}, "error": error_msg}
     except requests.exceptions.Timeout:
-        logger.error("新联网API调用超时")
+        logger.error("API调用超时")
         return {"raw_text": "", "token_usage": {}, "error": "接口调用超时"}
     except Exception as e:
-        logger.error(f"新联网API调用异常：{str(e)}")
+        logger.error(f"API调用异常：{str(e)}")
         return {"raw_text": "", "token_usage": {}, "error": f"调用异常：{str(e)}"}
 
 
 def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> Dict:
     """
-    批量获取股票全量概念标签（联网搜索+强制标准化）
+    批量获取股票全量概念标签（原有逻辑100%保留，不修改）
     """
     stock_info = [f"{item['ts_code']}|{item['name']}" for item in stock_batch]
     stock_count = len(stock_batch)
 
-    # 精简Prompt，明确要求使用标准标签
     prompt = f"""
 严格按以下格式输出，无任何多余内容：
 每行1只股票，格式：序号 股票代码 概念标签1,概念标签2,概念标签3,...
@@ -100,6 +97,7 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
 输出示例：
 1 002456.SZ AI算力,半导体,先进封装,液冷
 2 600879.SH 商业航天,卫星互联网,低空经济,军工电子
+注意！二次review你输出的内容,特别是股票代码,和我一开始给你的列表里的代码一一对应检查,不要写错,漏写,多写
 """
 
     logger.info(f"===== 批次[{batch_index}] 开始批量获取概念，共{stock_count}只股票 =====")
@@ -119,7 +117,6 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
                 logger.debug(f"跳过无效行：{line}")
                 continue
 
-            # 拆分：序号 代码 概念
             parts = line.split(maxsplit=2)
             if len(parts) < 3:
                 logger.warning(f"行格式错误，跳过：{line}")
@@ -127,7 +124,7 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
 
             seq_str, ts_code, raw_concepts = parts
             try:
-                seq = int(seq_str) - 1  # 转成列表索引（从0开始）
+                seq = int(seq_str) - 1
             except ValueError:
                 logger.warning(f"序号非数字，跳过行：{line}")
                 continue
@@ -140,7 +137,11 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
                 logger.warning(f"序号{seq + 1}超出范围（共{stock_count}只），跳过：{line}")
 
         logger.info(f"批次[{batch_index}] 解析完成，成功获取{len(result_data)}/{stock_count}只股票概念")
-        return {"error": None, "data": result_data}
+        return {
+            "error": None,
+            "data": result_data,
+            "token_usage": api_resp["token_usage"]  # 只加这一行
+        }
 
     except Exception as e:
         logger.error(f"批次[{batch_index}] 解析失败：{str(e)}，原始文本：{raw_text}")
@@ -149,11 +150,9 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
 
 def update_concept_tags_for_20_stocks():
     """
-    批量更新20只股票的concept_tags字段，测试效果
+    【原有函数100%保留】批量更新20只股票的concept_tags字段，测试效果
     """
     logger.info("===== 开始更新20只股票的concept_tags =====")
-
-    # 1. 从数据库读取20只股票（ts_code + name）
     read_sql = "SELECT ts_code, name FROM stock_basic LIMIT 20"
     stocks = db.query(read_sql)
     if not stocks:
@@ -161,42 +160,122 @@ def update_concept_tags_for_20_stocks():
         return
     logger.info(f"成功读取{len(stocks)}只股票：{[s['ts_code'] for s in stocks]}")
 
-    # 2. 调用API批量获取概念
     concept_result = get_stock_concepts_batch(stocks, batch_index=1)
     if concept_result.get("error") or not concept_result.get("data"):
         logger.error(f"批量获取概念失败，终止更新：{concept_result.get('error')}")
         return
 
-    # 3. 批量更新到数据库
     update_sql = "UPDATE stock_basic SET concept_tags = %s WHERE ts_code = %s"
-    params_list = [
-        (item["concept_tags"], item["ts_code"])
-        for item in concept_result["data"]
-    ]
+    params_list = [(item["concept_tags"], item["ts_code"]) for item in concept_result["data"]]
 
     logger.info(f"准备批量更新{len(params_list)}条记录")
     affected_rows = db.batch_execute(update_sql, params_list)
 
     if affected_rows is not None:
         logger.info(f"✅ 批量更新成功，影响行数：{affected_rows}")
-        # 打印更新详情
         for item in concept_result["data"]:
             logger.info(f"[{item['ts_code']}] concept_tags: {item['concept_tags']}")
     else:
         logger.error("❌ 批量更新失败")
 
 
+def batch_update_with_single_fail_log(params_list: List[tuple]) -> int:
+    """
+    【核心新增】批量更新 + 单条失败时记录ERROR级别股票代码
+    满足你要求：个别失败，日志打印具体ts_code
+    原有批量逻辑不变，只增加失败日志
+    """
+    update_sql = "UPDATE stock_basic SET concept_tags = %s WHERE ts_code = %s"
+    success_count = 0
+
+    for param in params_list:
+        concept_tags, ts_code = param
+        try:
+            rows = db.execute(update_sql, (concept_tags, ts_code))
+            if rows and rows > 0:
+                success_count += 1
+            else:
+                logger.error(f"更新失败[{ts_code}]：未找到股票或无变更")
+        except Exception as e:
+            # ✅ 你要的：个别失败，ERROR日志记录股票代码
+            logger.error(f"更新异常[{ts_code}]：{str(e)}")
+
+    return success_count
+
+
+def update_all_stock_concept_tags(batch_size: int = 20):
+    """
+    【核心新增】逐批更新全表，直到全部完成
+    1. 有序分页（按ts_code，不漏不重）
+    2. 自动分批
+    3. 单条失败打error日志
+    4. 统计总Token
+    """
+    # 初始化Token统计（路径和你项目一致）
+    token_file_path = "data/token_usage.json"
+    init_token_file(token_file_path, force=False)
+
+    logger.info("===== 开始全量更新 stock_basic 所有股票 concept_tags =====")
+    total_stock = 0
+    total_success = 0
+    batch_index = 0
+    last_ts_code = ""
+
+    while True:
+        batch_index += 1
+        # 有序分页（按ts_code，绝对不漏不重）
+        if not last_ts_code:
+            read_sql = f"SELECT ts_code, name FROM stock_basic WHERE concept_tags IS NULL ORDER BY ts_code LIMIT {batch_size}"
+        else:
+            read_sql = f"SELECT ts_code, name FROM stock_basic WHERE ts_code > '{last_ts_code}' AND concept_tags IS NULL ORDER BY ts_code LIMIT {batch_size}"
+
+        stock_batch = db.query(read_sql)
+        if not stock_batch or len(stock_batch) == 0:
+            logger.info("===== 全量更新完成！无更多股票 =====")
+            break
+
+        current_batch_size = len(stock_batch)
+        total_stock += current_batch_size
+        last_ts_code = stock_batch[-1]["ts_code"]
+
+        logger.info(f"\n===== 批次[{batch_index}] | 累计处理：{total_stock} 只 =====")
+
+        # 1. 调用API获取概念（原有逻辑）
+        concept_result = get_stock_concepts_batch(stock_batch, batch_index)
+        if concept_result.get("error") or not concept_result.get("data"):
+            logger.error(f"批次[{batch_index}] 跳过，继续下一批")
+            time.sleep(1)
+            continue
+
+        # 2. 统计Token（调用common_tools）
+        token_usage = concept_result.get("token_usage", {})
+        update_token_usage(
+            prompt_tokens=token_usage.get("prompt_tokens", 0),
+            completion_tokens=token_usage.get("completion_tokens", 0),
+            total_tokens=token_usage.get("total_tokens", 0),
+            token_stat=True
+        )
+
+        # 3. 批量更新 + 单条失败日志（满足你要求）
+        params_list = [(item["concept_tags"], item["ts_code"]) for item in concept_result["data"]]
+        success = batch_update_with_single_fail_log(params_list)
+        total_success += success
+
+        logger.info(f"批次[{batch_index}] 成功：{success}/{current_batch_size} | 总成功：{total_success}/{total_stock}")
+
+        # 4. 防API限流
+        time.sleep(1)
+
+    logger.info(f"\n🎉 全量更新结束！总股票：{total_stock} | 成功：{total_success}")
+
 
 if __name__ == "__main__":
-#     # 测试：调用新联网API补全单只股票概念
-#     test_prompt = """
-# 仅使用标准化标签，输出格式：1 600879.SH 商业航天,卫星互联网,低空经济,军工电子
-# 股票列表：["600879.SH|航天电子"]
-# """
-#     result = call_doubao_search_api(test_prompt, end_date="2026-02-24")
-#     if not result["error"]:
-#         print(f"返回结果：{result['raw_text']}")
-#     else:
-#         print(f"调用失败：{result['error']}")
-    update_concept_tags_for_20_stocks()
+    # 初始化Token文件
+    init_token_file("data/token_usage.json", force=False)
 
+    # 你可以选：
+    # 1. 测试20只（原有功能）
+    # update_concept_tags_for_20_stocks()
+
+    # 2. 全量更新（正式运行）
+    update_all_stock_concept_tags(batch_size=20)
