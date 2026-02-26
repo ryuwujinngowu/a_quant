@@ -7,8 +7,6 @@ from utils.log_utils import logger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
-API_REQUEST_INTERVAL = 0.2  # Tushare接口限流间隔（秒），统一管理
-TS_TOKEN_DEFAULT = ""
 API_REQUEST_INTERVAL = 1  # Tushare接口限流间隔（秒），统一管理
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
 DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
