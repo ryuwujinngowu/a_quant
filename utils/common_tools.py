@@ -1,13 +1,16 @@
 import json
 import os
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Tuple
-from typing import List, Dict, Optional
-from utils.db_utils import db  # 确保db工具已导入
 import threading
-from utils.log_utils import logger
+from datetime import datetime, timedelta
+import pandas as pd
+import time
+from pathlib import Path
+import functools
+from typing import List, Dict
+from typing import Tuple
 
+from utils.db_utils import db  # 确保db工具已导入
+from utils.log_utils import logger
 
 # Token 统计文件配置（默认统计到 data 目录，可根据需要调整）
 TOKEN_USAGE_FILE = None
@@ -264,4 +267,60 @@ def get_token_usage(file_path: str) -> dict:
             "call_count": 0
         }
 
+# -------------------------- 重试装饰器实现 --------------------------
+def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
+    """
+    ：支持异常重试 + 空DataFrame重试
+    :param max_retries: 最大重试次数
+    :param retry_interval: 每次重试的间隔（秒）
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    # 执行原方法
+                    result = func(self, *args, **kwargs)
+
+                    # 检查返回值是否为空DataFrame
+                    if isinstance(result, pd.DataFrame) and result.empty:
+                        retry_count += 1
+                        # 达到最大重试次数，记录警告并返回空DataFrame
+                        if retry_count >= max_retries:
+                            logger.warning(
+                                f"【{func.__name__}】空数据重试次数已达上限（{max_retries}次），最终返回空数据 "
+                                f"参数：args={args}, kwargs={kwargs}"
+                            )
+                            return result
+                        # 未达最大次数，记录警告并等待后重试
+                        logger.warning(
+                            f"【{func.__name__}】返回空DataFrame，将进行第{retry_count}次重试（剩余{max_retries - retry_count}次） "
+                            f"间隔{retry_interval}秒"
+                        )
+                        time.sleep(retry_interval)
+                        continue  # 触发下一次重试
+                    # 数据非空，直接返回
+                    return result
+
+                except Exception as e:
+                    retry_count += 1
+                    # 达到最大重试次数，记录错误并返回空DataFrame
+                    if retry_count >= max_retries:
+                        logger.error(
+                            f"【{func.__name__}】异常重试次数已达上限（{max_retries}次），最终执行失败 "
+                            f"参数：args={args}, kwargs={kwargs} 错误：{str(e)}"
+                        )
+                        return pd.DataFrame()
+                    # 未达最大次数，记录警告并等待后重试
+                    logger.warning(
+                        f"【{func.__name__}】执行异常，将进行第{retry_count}次重试（剩余{max_retries - retry_count}次） "
+                        f"间隔{retry_interval}秒 错误：{str(e)}"
+                    )
+                    time.sleep(retry_interval)
+            # 兜底返回空DataFrame
+            return pd.DataFrame()
+        return wrapper
+    return decorator
 

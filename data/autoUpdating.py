@@ -6,7 +6,6 @@
 """
 import datetime
 import logging
-import time
 
 from data.data_cleaner import DataCleaner
 from data.data_fetcher import data_fetcher

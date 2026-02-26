@@ -1,11 +1,10 @@
 import os
-from typing import Optional, List, Dict, Tuple, Union
+from typing import Optional, List, Tuple
 
 import pandas as pd
 import pymysql
 from dbutils.pooled_db import PooledDB
 from dotenv import load_dotenv
-
 from utils.log_utils import logger
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env")

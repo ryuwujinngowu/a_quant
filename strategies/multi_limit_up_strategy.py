@@ -1,27 +1,25 @@
 from datetime import datetime
-import time
-from typing import List, Dict, Tuple, Optional
+from typing import Dict
+import os
 import pandas as pd
-from strategies.base_strategy import BaseStrategy
-
 # 导入核心配置：涨停率、最大持仓数 + 新增可配置的股票类型过滤开关
-from config.config import (
+from config.config  import (
     MAIN_BOARD_LIMIT_UP_RATE,
     STAR_BOARD_LIMIT_UP_RATE,
     BJ_BOARD_LIMIT_UP_RATE,
     MAX_POSITION_COUNT,
-    FILTER_BSE_STOCK,  # 新增配置：是否过滤北交所股票（True/False）
-    FILTER_STAR_BOARD,  # 新增配置：是否过滤双创板（创业板/科创板，True/False）
-    FILTER_MAIN_BOARD  # 新增配置：是否过滤主板（True/False）
+    FILTER_BSE_STOCK,
+    FILTER_STAR_BOARD,
+    FILTER_MAIN_BOARD
 )
+
 from data.data_cleaner import data_cleaner
-from data.data_fetcher import data_fetcher
 from strategies.base_strategy import BaseStrategy
 from utils.log_utils import logger
 
 # 分钟线缓存开关（全局配置）
 CACHE_ENABLE = True
-
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "config.py")
 
 class MultiLimitUpStrategy(BaseStrategy):
     """多标的涨停策略（核心：首次触板/一字板回封选股，分仓控制）"""
@@ -29,6 +27,7 @@ class MultiLimitUpStrategy(BaseStrategy):
     def __init__(self):
         """策略初始化：加载配置+初始化缓存/信号容器"""
         super().__init__()
+
         self.max_position_count = MAX_POSITION_COUNT  # 最大持仓数量（分仓个数）
         self.limit_up_price_tolerance = 0.999  # 涨停价容忍度（避免价格微小误差漏判）
         self.sell_signal_map: Dict[str, str] = {}  # 卖出信号映射：{股票代码: 卖出类型(open/close)}

@@ -1,12 +1,11 @@
 import pandas as pd
-import numpy as np
-from strategies.base_strategy import BaseStrategy
+from config.config import MAX_POSITION_COUNT
+
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
-from config.config import MAX_POSITION_COUNT
 from data.data_cleaner import data_cleaner
 from data.data_fetcher import data_fetcher
-from strategies.multi_limit_up_strategy import MultiLimitUpStrategy
+from strategies.base_strategy import BaseStrategy
 from utils.db_utils import db  # 正确导入数据库工具
 from utils.log_utils import logger
 
@@ -192,15 +191,18 @@ class MultiStockBacktestEngine:
         hold_stocks = list(self.account.positions.keys())  # 先转成列表，固定迭代对象
         for ts_code in hold_stocks:
             # 补充校验：防止迭代过程中该股票已被卖出（避免重复操作）
-            if ts_code not in self.account.positions:
-                continue
-            stock_df = last_daily_df[last_daily_df["ts_code"] == ts_code]
-            if stock_df.empty:
-                logger.warning(f"{last_date} 强制清仓：{ts_code} 无当日日线数据，跳过清仓")
-                continue
-            close_price = stock_df["close"].iloc[0]
-            self.account.sell(trade_date=last_date, ts_code=ts_code, price=close_price)
-            logger.info(f"{last_date} 强制清仓：{ts_code} 卖出成功，价格：{close_price}")
+            try:
+                if ts_code not in self.account.positions:
+                    continue
+                stock_df = last_daily_df[last_daily_df["ts_code"] == ts_code]
+                if stock_df.empty:
+                    logger.warning(f"{last_date} 强制清仓：{ts_code} 无当日日线数据，跳过清仓")
+                    continue
+                close_price = stock_df["close"].iloc[0]
+                self.account.sell(trade_date=last_date, ts_code=ts_code, price=close_price)
+                logger.info(f"{last_date} 强制清仓：{ts_code} 卖出成功，价格：{close_price}")
+            except KeyError:
+                logger.warning(f"无当日日线数据,检查持仓存在停牌股票")
         self.account.update_daily_asset(trade_date=last_date, daily_price_df=last_daily_df)
 
         # 计算回测指标

@@ -7,7 +7,8 @@
 3. 统一管理策略通用属性（如信号映射、策略名称）
 """
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
+
 import pandas as pd
 
 

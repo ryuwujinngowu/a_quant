@@ -1,11 +1,13 @@
-import os
 import json
+import os
+
 import requests
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from utils.common_tools import init_token_file, update_token_usage, get_token_usage
 # 导入项目工具模块
 from utils.log_utils import logger
-from utils.common_tools import init_token_file, update_token_usage, get_token_usage
 
 
 # ====================== 加载配置 ======================
@@ -64,7 +66,6 @@ def get_retry_decorator():
 
 
 # ====================== 核心API调用函数 ======================
-@get_retry_decorator()
 @get_retry_decorator()
 def call_doubao_api(prompt: str) -> dict:
     """

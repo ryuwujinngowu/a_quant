@@ -2,13 +2,14 @@ import os
 import time
 from typing import Optional, Dict, Any, List, Union
 import pandas as pd
+from  utils.common_tools import retry_decorator
 import tushare as ts
 from utils.log_utils import logger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
 API_REQUEST_INTERVAL = 1  # Tushare接口限流间隔（秒），统一管理
-TS_TOKEN_DEFAULT = ""
+TS_TOKEN_DEFAULT = "6a3e1b964b1847a66a6e4c5421006605ab279b9b2d4ca33a8aa3e8b3"
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
 DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
 
@@ -235,6 +236,7 @@ class DataFetcher:
             logger.error(f"指数日线数据获取失败，参数：{params}，错误：{str(e)}")
             return pd.DataFrame()
 
+    @retry_decorator()  # 应用重试装饰器，自动读取.env配置的参数
     def fetch_stk_mins(
             self,
             ts_code: Union[str, List[str]],
@@ -255,27 +257,23 @@ class DataFetcher:
         Returns:
             分钟线DataFrame（空数据返回空DataFrame）
         """
+
         params = _filter_empty_params({
             "ts_code": ts_code,
             "freq": freq,
             "start_date": start_date,
             "end_date": end_date
         })
-
+        logger.debug(f"获取{ts_code}分钟线数据，参数：{params}")
         time.sleep(API_REQUEST_INTERVAL)
-        try:
-            logger.debug(f"获取{ts_code}分钟线数据，参数：{params}")
+        mins_df = self.pro.stk_mins(**params)
 
-            mins_df = self.pro.stk_mins(**params)
+        if mins_df.empty:
+            logger.warning(f"{ts_code}分钟线数据为空,准备重试，参数：{params}")
 
-            if mins_df.empty:
-                logger.warning(f"{ts_code}分钟线数据为空，参数：{params}")
+        logger.debug(f"{ts_code}分钟线数据获取完成，行数：{len(mins_df)}")
+        return mins_df
 
-            logger.debug(f"{ts_code}分钟线数据获取完成，行数：{len(mins_df)}")
-            return mins_df
-        except Exception as e:
-            logger.error(f"{ts_code}分钟线数据获取失败，参数：{params}，错误：{str(e)}")
-            return pd.DataFrame()
 
     def fetch_trade_cal(
             self,
@@ -446,10 +444,10 @@ if __name__ == "__main__":
 #     # 测试标的：000001.SZ（平安银行，确保有数据）
 #     # 测试日期：2026-01-05（你的回测日期，交易日）
 #     mins_df_1 = data_fetcher.fetch_stk_mins(
-#         ts_code="301550.SZ",
+#         ts_code="605255.SH",
 #         freq="1min",
-#         start_date="2026-01-05 09:25:00",
-#         end_date="2026-01-05 15:00:00"
+#         start_date="2026-01-14 09:25:00",
+#         end_date="2026-01-14 15:00:00"
 #     )
 #     if not mins_df_1.empty:
 #         logger.info(f"✅ 有效股票分钟线获取成功，行数：{len(mins_df_1)}")
@@ -459,10 +457,10 @@ if __name__ == "__main__":
 #         logger.error(f"❌ 有效股票分钟线返回空（可能：日期非交易日/权限不足/接口无数据）")
 # except Exception as e:
 #     logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
-#
 
-    # # logger.info("===== 测试：获取交易日历数据 =====")
-    # # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
+
+    # logger.info("===== 测试：获取交易日历数据 =====")
+    # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
     # trade_cal_df = data_fetcher.fetch_trade_cal(
     #     start_date='20250516',
     #     end_date='20250521',
