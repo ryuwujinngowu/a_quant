@@ -42,7 +42,7 @@ def call_doubao_search_api(prompt: str) -> Dict:
             url=API_URL,
             headers=headers,
             json=data,
-            timeout=30
+            timeout=40
         )
         response.raise_for_status()
 
@@ -97,7 +97,8 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
 输出示例：
 1 002456.SZ AI算力,半导体,先进封装,液冷
 2 600879.SH 商业航天,卫星互联网,低空经济,军工电子
-注意！二次review你输出的内容,特别是股票代码,和我一开始给你的列表里的代码一一对应检查,不要写错,漏写,多写
+注意！二次review你输出的内容,特别是股票代码,是.SH还是.SZ，和给你的列表里的代码一一对应检查,不要写错
+我再提醒你一遍，注意你的输出格式，严格按照示例来。仅输出序号 股票代码 标签……不要给我股票代码|股票名称
 """
 
     logger.info(f"===== 批次[{batch_index}] 开始批量获取概念，共{stock_count}只股票 =====")
@@ -147,36 +148,36 @@ def get_stock_concepts_batch(stock_batch: List[Dict], batch_index: int = 0) -> D
         logger.error(f"批次[{batch_index}] 解析失败：{str(e)}，原始文本：{raw_text}")
         return {"error": f"解析失败：{str(e)}", "data": []}
 
-
-def update_concept_tags_for_20_stocks():
-    """
-    【原有函数100%保留】批量更新20只股票的concept_tags字段，测试效果
-    """
-    logger.info("===== 开始更新20只股票的concept_tags =====")
-    read_sql = "SELECT ts_code, name FROM stock_basic LIMIT 20"
-    stocks = db.query(read_sql)
-    if not stocks:
-        logger.error("未读取到任何股票数据，终止更新")
-        return
-    logger.info(f"成功读取{len(stocks)}只股票：{[s['ts_code'] for s in stocks]}")
-
-    concept_result = get_stock_concepts_batch(stocks, batch_index=1)
-    if concept_result.get("error") or not concept_result.get("data"):
-        logger.error(f"批量获取概念失败，终止更新：{concept_result.get('error')}")
-        return
-
-    update_sql = "UPDATE stock_basic SET concept_tags = %s WHERE ts_code = %s"
-    params_list = [(item["concept_tags"], item["ts_code"]) for item in concept_result["data"]]
-
-    logger.info(f"准备批量更新{len(params_list)}条记录")
-    affected_rows = db.batch_execute(update_sql, params_list)
-
-    if affected_rows is not None:
-        logger.info(f"✅ 批量更新成功，影响行数：{affected_rows}")
-        for item in concept_result["data"]:
-            logger.info(f"[{item['ts_code']}] concept_tags: {item['concept_tags']}")
-    else:
-        logger.error("❌ 批量更新失败")
+#
+# def update_concept_tags_for_20_stocks():
+#     """
+#     【原有函数100%保留】批量更新20只股票的concept_tags字段，测试效果
+#     """
+#     logger.info("===== 开始更新20只股票的concept_tags =====")
+#     read_sql = "SELECT ts_code, name FROM stock_basic LIMIT 20"
+#     stocks = db.query(read_sql)
+#     if not stocks:
+#         logger.error("未读取到任何股票数据，终止更新")
+#         return
+#     logger.info(f"成功读取{len(stocks)}只股票：{[s['ts_code'] for s in stocks]}")
+#
+#     concept_result = get_stock_concepts_batch(stocks, batch_index=1)
+#     if concept_result.get("error") or not concept_result.get("data"):
+#         logger.error(f"批量获取概念失败，终止更新：{concept_result.get('error')}")
+#         return
+#
+#     update_sql = "UPDATE stock_basic SET concept_tags = %s WHERE ts_code = %s"
+#     params_list = [(item["concept_tags"], item["ts_code"]) for item in concept_result["data"]]
+#
+#     logger.info(f"准备批量更新{len(params_list)}条记录")
+#     affected_rows = db.batch_execute(update_sql, params_list)
+#
+#     if affected_rows is not None:
+#         logger.info(f"✅ 批量更新成功，影响行数：{affected_rows}")
+#         for item in concept_result["data"]:
+#             logger.info(f"[{item['ts_code']}] concept_tags: {item['concept_tags']}")
+#     else:
+#         logger.error("❌ 批量更新失败")
 
 
 def batch_update_with_single_fail_log(params_list: List[tuple]) -> int:
@@ -211,9 +212,6 @@ def update_all_stock_concept_tags(batch_size: int = 20):
     3. 单条失败打error日志
     4. 统计总Token
     """
-    # 初始化Token统计（路径和你项目一致）
-    token_file_path = "data/token_usage.json"
-    init_token_file(token_file_path, force=False)
 
     logger.info("===== 开始全量更新 stock_basic 所有股票 concept_tags =====")
     total_stock = 0
@@ -247,15 +245,6 @@ def update_all_stock_concept_tags(batch_size: int = 20):
             time.sleep(1)
             continue
 
-        # 2. 统计Token（调用common_tools）
-        token_usage = concept_result.get("token_usage", {})
-        update_token_usage(
-            prompt_tokens=token_usage.get("prompt_tokens", 0),
-            completion_tokens=token_usage.get("completion_tokens", 0),
-            total_tokens=token_usage.get("total_tokens", 0),
-            token_stat=True
-        )
-
         # 3. 批量更新 + 单条失败日志（满足你要求）
         params_list = [(item["concept_tags"], item["ts_code"]) for item in concept_result["data"]]
         success = batch_update_with_single_fail_log(params_list)
@@ -271,7 +260,7 @@ def update_all_stock_concept_tags(batch_size: int = 20):
 
 if __name__ == "__main__":
     # 初始化Token文件
-    init_token_file("data/token_usage.json", force=False)
+    # init_token_file("token_usage.json", force=False)
 
     # 你可以选：
     # 1. 测试20只（原有功能）

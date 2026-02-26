@@ -55,16 +55,16 @@ class DataCleaner:
             elif pd.api.types.is_numeric_dtype(dtype):
                 df_cleaned[field] = df_cleaned[field].fillna(0)
 
-        # 其他字段空值填充（统一逻辑，提升效率）
-        other_cols = [col for col in df_cleaned.columns if col not in not_null_fields]
-        for col in other_cols:
-            dtype = df_cleaned[col].dtype
-            if pd.api.types.is_object_dtype(dtype):
-                df_cleaned[col] = df_cleaned[col].fillna("")
-            elif pd.api.types.is_numeric_dtype(dtype):
-                df_cleaned[col] = df_cleaned[col].fillna(0)
-            elif pd.api.types.is_datetime64_any_dtype(dtype):
-                df_cleaned[col] = df_cleaned[col].fillna(None)
+        # # 其他字段空值填充（统一逻辑，提升效率）
+        # other_cols = [col for col in df_cleaned.columns if col not in not_null_fields]
+        # for col in other_cols:
+        #     dtype = df_cleaned[col].dtype
+        #     if pd.api.types.is_object_dtype(dtype):
+        #         df_cleaned[col] = df_cleaned[col].fillna("")
+        #     elif pd.api.types.is_numeric_dtype(dtype):
+        #         df_cleaned[col] = df_cleaned[col].fillna(0)
+        #     elif pd.api.types.is_datetime64_any_dtype(dtype):
+        #         df_cleaned[col] = df_cleaned[col].fillna(None)
 
         return df_cleaned
 
@@ -428,7 +428,6 @@ class DataCleaner:
         clean_df = self._clean_kline_min_data(raw_df)
         if clean_df.empty:
             return 0
-
         # 对齐数据库字段
         final_df = self._align_df_with_db(clean_df, table_name)
 
@@ -477,7 +476,6 @@ class DataCleaner:
 
         # 第三步：数据库无数据，调用接口拉取
         logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，调用接口拉取")
-        time.sleep(0.5)
         raw_df = data_fetcher.fetch_stk_mins(
             ts_code=ts_code,
             freq="1min",
@@ -722,6 +720,33 @@ class DataCleaner:
             logger.warning(f"失败股票代码：{failed_codes}")
         return total_ingest_rows
 
+    def insert_stock_daily_basic(self,
+            ts_code: str,  # 支持单股票代码/多股票代码列表
+            trade_date: str,
+            start_date: str,  # 开始日期（格式：YYYYMMDD）
+            end_date: Optional[str] = None,  # 结束日期（格式：YYYYMMDD），不传默认到当日
+            table_name: str = "stock_fin_indicator"  # 目标表名
+    ) -> Optional[int]:
+        """入库每日交易详细指标"""
+
+        rows = data_fetcher.fetch_stock_daily_basic(ts_code=ts_code,
+                     trade_date = trade_date,
+                    start_date=start_date,
+                    end_date=end_date)
+        if rows.empty:
+            return 0
+        cleaned_df = self._clean_special_fields(rows)
+        try:
+            affected_rows = db.batch_insert_df(
+                df=cleaned_df,
+                table_name=table_name,
+                ignore_duplicate=True
+            )
+            return affected_rows
+        except Exception as e:
+            logger.error(f"每日交易详情入库失败：{str(e)}", exc_info=True)
+            return None
+
 
 # 全局实例（保持不变，确保下游调用）
 data_cleaner = DataCleaner()
@@ -793,12 +818,25 @@ if __name__ == "__main__":
     #     logger.info("\n===== 分钟线数据（单股票+批量）测试完成 ✅ =====")
     # except Exception as e:
     #     logger.error(f"分钟线数据测试失败：{str(e)} ❌")
+    #
+    # '''方式2：多股票+仅指定开始日期（默认到当日）测试'''
+    # qfq_affected_rows2 = data_cleaner.clean_and_insert_kline_day_qfq(
+    #     ts_code=["600000.SH", "000001.SZ"],
+    #     start_date="20250201"
+    # )
+    # logger.info(f"多股票前复权日K入库完成，累计入库/更新行数：{qfq_affected_rows2}")
 
-    '''方式2：多股票+仅指定开始日期（默认到当日）测试'''
-    qfq_affected_rows2 = data_cleaner.clean_and_insert_kline_day_qfq(
-        ts_code=["600000.SH", "000001.SZ"],
-        start_date="20250201"
-    )
-    logger.info(f"多股票前复权日K入库完成，累计入库/更新行数：{qfq_affected_rows2}")
+    # # =================== 测试：获取交易详细信息数据 =====")
+    # pd.set_option('display.max_columns', None)
+    # pd.set_option('display.max_rows', None)
+    # pd.set_option('display.width', None)
+    # df = data_cleaner.insert_stock_daily_basic(
+    #     ts_code= '300436.SZ',
+    #     trade_date = '',
+    #     start_date='20260210',
+    #     end_date='20260213',
+    # )
+    # # 数据预览
+    # print(df)
 
 

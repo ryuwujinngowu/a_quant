@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ===================== 通用常量配置（统一管理，提升可维护性） =====================
 API_REQUEST_INTERVAL = 0.2  # Tushare接口限流间隔（秒），统一管理
 TS_TOKEN_DEFAULT = ""
+API_REQUEST_INTERVAL = 1  # Tushare接口限流间隔（秒），统一管理
 TUSHARE_API_URL = "http://tushare.xyz"  # Tushare接口地址，统一配置
 DEFAULT_PAGE_LIMIT = 8000  # 分钟线接口分页大小（适配Tushare接口限制）
 
@@ -262,6 +263,7 @@ class DataFetcher:
             "end_date": end_date
         })
 
+        time.sleep(API_REQUEST_INTERVAL)
         try:
             logger.debug(f"获取{ts_code}分钟线数据，参数：{params}")
 
@@ -316,6 +318,46 @@ class DataFetcher:
             return cal_df
         except Exception as e:
             logger.error(f"交易日历数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+    def fetch_stock_daily_basic(
+            self,
+            ts_code: Optional[str] = None,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取全部股票每日重要的基本面指标，可用于选股分析、报表展示等。单次请求最大返回6000条数据，可按日线循环提取全部历史。
+        接口文档：https://tushare.pro/document/2?doc_id=32
+
+        Args:
+            ts_code: 指数代码（如000001.SH）
+            二选一
+            trade_date: 单交易日（YYYYMMDD）
+            start_date: 开始日期（YYYYMMDD）
+            end_date: 结束日期（YYYYMMDD）
+
+        Returns:
+            指数日线DataFrame（空数据返回空DataFrame）
+        """
+        params = _filter_empty_params({
+            "ts_code": ts_code,
+            "trade_date": trade_date,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+
+        try:
+            index_df = self.pro.daily_basic(**params)
+            logger.debug(f"获取当日交易详细信息，参数：{ts_code}/{trade_date}，行数：{len(index_df)}")
+
+            if index_df.empty:
+                logger.warning(f"获取当日交易详细信息为空，参数：{params}")
+
+            return index_df
+        except Exception as e:
+            logger.error(f"指数日线数据获取失败，参数：{params}，错误：{str(e)}")
             return pd.DataFrame()
 
 
@@ -420,8 +462,8 @@ if __name__ == "__main__":
 #     logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
 #
 
-    # logger.info("===== 测试：获取交易日历数据 =====")
-    # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
+    # # logger.info("===== 测试：获取交易日历数据 =====")
+    # # # 调用fetch_trade_cal方法（参数说明：2025.05.16-2025.05.21，上交所，仅返回交易日）
     # trade_cal_df = data_fetcher.fetch_trade_cal(
     #     start_date='20250516',
     #     end_date='20250521',
@@ -455,3 +497,16 @@ if __name__ == "__main__":
     #     print("\n数据字段：", df.columns.tolist())
     # else:
     #     print("未获取到数据，请检查Token/股票代码/日期是否正确")
+    #
+    # # =================== 测试：获取交易详细信息数据 =====")
+    # pd.set_option('display.max_columns', None)
+    # pd.set_option('display.max_rows', None)
+    # pd.set_option('display.width', None)
+    # df = data_fetcher.fetch_stock_daily_basic(
+    #     ts_code= '',
+    #     trade_date = '20260226',
+    #     start_date='',
+    #     end_date='',
+    # )
+    # print(df)
+
