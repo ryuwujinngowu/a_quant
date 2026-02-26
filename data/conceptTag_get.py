@@ -13,7 +13,7 @@ def call_doubao_search_api(prompt: str) -> Dict:
     :param prompt: 输入提示词
     :return: 结构化响应 {"raw_text": "", "token_usage": {}, "error": None}
     """
-    API_KEY = '02f9dd23-b023-43bb-ae90-0c91ff7b9324'
+    API_KEY = ''
     API_URL = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"
     MODEL_ID = "bot-20260224232147-dfcct"
 
