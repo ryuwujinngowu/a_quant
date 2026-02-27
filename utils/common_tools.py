@@ -86,11 +86,11 @@ def getTagRank_daily(
     # ==================== 0. 初始化默认黑名单 ====================
     # 默认过滤掉常见的无分析性题材，用户可通过参数覆盖
     default_exclude = [
-        "融资融券", "转融券标的", "标普道琼斯A股",
-        "MSCI概念", "深股通", "沪股通",
-        "同花顺漂亮100", "富时罗素概念", "富时罗素概念股",
-        "央企国资改革", "地方国资改革", "证金持股",
-        "汇金持股", "养老金持股", "QFII重仓","专精特新",'MSCI中国','半年报预增'
+        "融资融券", "转融券标的", "标普道琼斯A股",'军工','核准制次新股',
+        "MSCI概念", "深股通", "沪股通",'一带一路','新股与次新股',
+        "同花顺漂亮100", "富时罗素概念", "富时罗素概念股",'比亚迪概念','5G',
+        "央企国资改革", "地方国资改革", "证金持股",'新能源汽车','次新股',
+        "汇金持股", "养老金持股", "QFII重仓","专精特新",'MSCI中国','半年报预增','华为概念','光伏概念','储能'
     ]
     if exclude_concepts is None:
         exclude_concepts = default_exclude
@@ -494,7 +494,7 @@ def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
     return decorator
 
 if __name__ == "__main__":
-    stock_rank_df = getStockRank_fortraining('20260225')
+    stock_rank_df = getStockRank_fortraining('20260210')
     ts_code_list = stock_rank_df['ts_code'].tolist()
     tag_rank_df = getTagRank_daily(ts_code_list)
 
