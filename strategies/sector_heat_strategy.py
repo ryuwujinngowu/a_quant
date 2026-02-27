@@ -12,6 +12,15 @@ from features.market_stats import SectorHeatFeature
 from learnEngine.dataset import DatasetBuilder
 from learnEngine.model import SectorHeatXGBModel
 from utils.log_utils import logger
+from config.config  import (
+    MAIN_BOARD_LIMIT_UP_RATE,
+    STAR_BOARD_LIMIT_UP_RATE,
+    BJ_BOARD_LIMIT_UP_RATE,
+    MAX_POSITION_COUNT,
+    FILTER_BSE_STOCK,
+    FILTER_STAR_BOARD,
+    FILTER_MAIN_BOARD
+)
 
 
 class SectorHeatStrategy(BaseStrategy):
@@ -31,8 +40,7 @@ class SectorHeatStrategy(BaseStrategy):
         self.sector_feature = SectorHeatFeature()
         self.dataset_builder = DatasetBuilder()
         self.xgb_model = SectorHeatXGBModel()
-        # 持仓记录（用于D+1卖出时匹配买卖信号）
-        self.hold_stock_dict: Dict[str, str] = {}
+
 
     def initialize(self) -> None:
         """
@@ -61,14 +69,7 @@ class SectorHeatStrategy(BaseStrategy):
         # ========== 步骤1：生成卖出信号（严格匹配基类的sell_signal_map格式） ==========
         # 初始化空的卖出信号字典（键：股票代码，值：卖出类型"close"）
         sell_signal_map = {}
-        # 遍历当前持仓，按T+1规则生成卖出信号
-        for ts_code in positions:
-            buy_date = self.hold_stock_dict.get(ts_code, "")
-            if buy_date and self._is_next_trade_day(buy_date, trade_date):
-                # 卖出类型为"close"（收盘卖出，也可根据需求改为"open"）
-                sell_signal_map[ts_code] = "close"
-                # 移除已卖出的持仓记录
-                del self.hold_stock_dict[ts_code]
+
 
         # ========== 步骤2：生成买入信号（严格匹配基类的buy_stocks列表格式） ==========
         buy_stocks = []

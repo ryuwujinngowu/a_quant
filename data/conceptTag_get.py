@@ -5,7 +5,7 @@ from utils.log_utils import logger
 from typing import Dict, List
 from utils.db_utils import db
 # 导入Token统计工具
-from utils.common_tools import init_token_file, update_token_usage
+
 
 def call_doubao_search_api(prompt: str) -> Dict:
     """
