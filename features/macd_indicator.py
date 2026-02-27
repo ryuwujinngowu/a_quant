@@ -245,10 +245,10 @@ if __name__ == "__main__":
     # ========== 测试2：新增多股票批量计算 ==========
     logger.info("\n===== 测试2：多股票批量计算 =====")
     # 传入股票代码列表
-    multi_stocks = ["688167.SH", "300308.SZ"]
+    multi_stocks = ["300502.SZ"]
     macd_multi = macd_indicator.calculate_macd(
         ts_code=multi_stocks,
-        start_date="20250105"
+        start_date="20250305"
     )
     if not macd_multi.empty:
         # 便捷方法：获取每个股票的交叉日期

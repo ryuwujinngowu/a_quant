@@ -9,26 +9,28 @@ QuantTradingSystem/
 │   ├── data_cleaner.py     # 数据清洗（去重/补全/格式转换）
 │   └── autoUpdating.py     # 数据自动更新脚本
 ├── data_realtime/          # 实时数据层
-│   └── data_realtmeFetcher.py  # 实时行情拉取（注：文件名待优化：realtme→realtime）
+│   └── data_realtime_fetcher.py  # 【修改】修正文件名拼写：realtme→realtime
 ├── strategies/             # 策略层
 │   ├── base_strategy.py    # 策略抽象基类（封装通用逻辑）
 │   ├── limit_up_strategy.py # 涨停策略实现
 │   ├── multi_limit_up_strategy.py # 多涨停策略实现
-│   └── A_ector_heat_strategy.py                #板块热度选股策略
+│   └── sector_heat_strategy.py  # 【修改】修正文件名：A_ector→sector，板块热度策略核心实现
 ├── backtest/               # 回测层
 │   ├── engine.py           # 回测引擎（核心：逐K线模拟交易）
 │   ├── account.py          # 模拟账户（持仓/资金/订单管理）
 │   └── metrics.py          # 回测绩效指标（夏普比率/最大回撤/胜率等）
-├── learnEngine/            # 机器学习层
-│   ├── dataset.py          # 量化数据集构建（数据+特征）
-│   ├── lable.py            # 交易标签生成（注：文件名待优化：lable→label）
-│   └── modle.py            # 模型训练/评估/推理（注：文件名待优化：modle→model）
+├── learnEngine/            # 机器学习层【核心补全，原文件为空】
+│   ├── __init__.py         # 【新增】包导入初始化
+│   ├── label.py            # 【修改】修正文件名：lable→label，交易标签生成
+│   ├── dataset.py          # 【核心】训练/推理数据集构建（特征+标签绑定）
+│   └── model.py            # 【修改】修正文件名：modle→model，XGBoost模型训练/推理/保存
 ├── features/               # 特征工程层
-│   └── technical_indicator.py # 技术指标（MA/RSI/MACD等）
-│   └── base_feature.py      #特征基类
-│   └── ma_indicator.py        #均线计算
-│   └── macd_indicator.py       #macd金叉死叉计算
-│   └── market_stats.py            #板块热度因子计算
+│   ├── __init__.py         # 【新增】包导入初始化
+│   ├── base_feature.py     # 特征基类
+│   ├── technical_indicator.py # 技术指标（MA/RSI/MACD等）
+│   ├── ma_indicator.py     # 均线计算
+│   ├── macd_indicator.py   # macd金叉死叉计算
+│   └── market_stats.py     # 【核心补全】板块热度30个因子计算（预设接口）
 └── utils/                  # 通用工具层
     ├── common_tools.py     # 通用函数（时间转换/数据格式）
     ├── db_utils.py         # 数据库操作（读写数据）

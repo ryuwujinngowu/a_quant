@@ -358,24 +358,84 @@ class DataFetcher:
             return pd.DataFrame()
 
 
+    def fetch_stk_factor_pro(
+            self,
+            ts_code: Optional[str] = None,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取股票每日技术面因子数据（专业版），用于跟踪股票当前走势情况，数据覆盖全历史。
+        接口文档：股票技术面因子(专业版) - stk_factor_pro
+        限量：单次调取最多返回10000条数据，可以通过日期参数循环
+        积分：5000积分每分钟可以请求30次，8000积分以上每分钟500次
+
+        Args:
+            ts_code: 股票代码（如000001.SZ、600000.SH）
+            二选一
+            trade_date: 单交易日（YYYYMMDD）
+            start_date: 开始日期（YYYYMMDD）
+            end_date: 结束日期（YYYYMMDD）
+
+        Returns:
+            股票技术面因子DataFrame（空数据返回空DataFrame）
+        """
+        params = _filter_empty_params({
+            "ts_code": ts_code,
+            "trade_date": trade_date,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+
+        try:
+            factor_df = self.pro.stk_factor_pro(**params)
+            logger.debug(f"获取股票专业版技术面因子数据，参数：{ts_code}/{trade_date}，行数：{len(factor_df)}")
+
+            if factor_df.empty:
+                logger.warning(f"获取股票专业版技术面因子数据为空，参数：{params}")
+
+            return factor_df
+        except Exception as e:
+            logger.error(f"股票专业版技术面因子数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+
+
 # ===================== 全局实例（保持原命名，不影响调用） =====================
 data_fetcher = DataFetcher()
 
 if __name__ == "__main__":
-    """测试stock_basic"""
-    # try:
-    #     # 1. 测试股票基础数据获取（修正exchange参数：SHSE=上交所，空则返回全部）
-    #     logger.info("===== 测试：获取A股上市股票基础数据（全字段） =====")
-    #     stock_base_df = data_fetcher.get_stockbase(
-    #         exchange="SSE",  # 可选：仅上交所，注释则返回所有交易所
-    #         list_status="L",  # 仅上市股票
-    #     )
-    #     if stock_base_df is not None:
-    #         logger.info(f"股票基础数据预览（前3行）：\n{stock_base_df.head(3)}")
-    #
-    #     logger.info("\n===== 所有数据获取测试完成 ✅ =====")
-    # except Exception as e:
-    #     logger.error(f"数据获取测试失败，错误信息：{str(e)} ❌")
+    pass
+        # 初始化DataFetcher实例
+        # data_fetcher = DataFetcher()
+
+        # 1. 测试单只股票单日期技术面因子获取
+        # logger.info("===== 测试1：获取单只股票单日期技术面因子 =====")
+        # single_stock_single_day_df = data_fetcher.fetch_stk_factor_pro(
+        #     ts_code="000001.SZ",  # 平安银行
+        #     trade_date="20260226"  # 测试日期（可根据实际调整）
+        # )
+        # if not single_stock_single_day_df.empty:
+        #     logger.info(f"单股票单日因子数据预览（前3行）：\n{single_stock_single_day_df.head(3)}")
+        # else:
+        #     logger.warning("单股票单日因子数据为空（可能日期未开盘/无数据）")
+
+        # 2. 测试单只股票一段时间技术面因子获取
+#     """测试stock_basic"""
+#     try:
+#         # 1. 测试股票基础数据获取（修正exchange参数：SHSE=上交所，空则返回全部）
+#         logger.info("===== 测试：获取A股上市股票基础数据（全字段） =====")
+#         stock_base_df = data_fetcher.get_stockbase(
+#             exchange="SSE",  # 可选：仅上交所，注释则返回所有交易所
+#             list_status="L",  # 仅上市股票
+#         )
+#         if stock_base_df is not None:
+#             logger.info(f"股票基础数据预览（前3行）：\n{stock_base_df.head(3)}")
+#
+#         logger.info("\n===== 所有数据获取测试完成 ✅ =====")
+#     except Exception as e:
+#         logger.error(f"数据获取测试失败，错误信息：{str(e)} ❌")
     # """测试新增的stock_company接口"""
     # try:
         # 1. 测试获取单只股票的公司信息
@@ -394,7 +454,7 @@ if __name__ == "__main__":
     # #     logger.info("\n===== 所有接口测试完成 ✅ =====")
     # except Exception as e:
     #     logger.error(f"接口测试失败，错误信息：{str(e)} ❌")
-    """测试新增的Kline_day接口"""
+    # """测试新增的Kline_day接口"""
     # logger.info("===== 测试：获取日线数据 =====")
     # stock_Kline_day = data_fetcher.fetch_kline_day(
     #     ts_code="000426.SZ",
@@ -407,7 +467,7 @@ if __name__ == "__main__":
     #     logger.info(f"日线数据预览：\n{stock_Kline_day.head(3)}")
     # logger.info("\n=====获取日线数据测试完成 ✅ =====")
     # ===================== 新增：指数日线接口测试代码 =====================
-    """测试新增的index_daily接口"""
+    # """测试新增的index_daily接口"""
     # try:
     #     logger.info("===== 测试：获取指数日线数据 =====")
     #     # 测试1：单指数单日数据
@@ -495,7 +555,7 @@ if __name__ == "__main__":
     # else:
     #     print("未获取到数据，请检查Token/股票代码/日期是否正确")
     #
-    # # =================== 测试：获取交易详细信息数据 =====")
+    # =================== 测试：获取交易详细信息数据 =====")
     # pd.set_option('display.max_columns', None)
     # pd.set_option('display.max_rows', None)
     # pd.set_option('display.width', None)

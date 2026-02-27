@@ -141,7 +141,7 @@ if __name__ == "__main__":
     # 1. 测试简单移动平均（MA）
     ma_result = technical_features.calculate_ma(
         ts_code="300308.SZ",
-        start_date="20230105",
+        start_date="20250305",
         ma_days=[5, 10, 20, 60]  # 测试5/10/20日均线
     )
     if not ma_result.empty:
