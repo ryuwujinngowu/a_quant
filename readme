@@ -1,27 +1,36 @@
-a_quant/
-├── config/
-│   └── config.py          # 全局配置
-├── data/
-│   ├── fetcher.py         # 网络数据获取
-│   ├── cleaner.py         # 数据清洗
-│   ├── autoUpdating       #每日定时执行，更新每日迭代的价格信息，也包括最新数据，所属概念的更新等。
-│   └── data_api.py        # 统一数据入口
-├── features/    #特征计算，例如均线计算口径，量化情绪需要计算的种种数据的口径，作为后期机器学习时策略的因子。
-│   └── technical.py       # 技术指标特征，区间最高价，最低价，支撑判断口径
-├── strategies/
-│   ├── base_strategy.py   # 策略基类，共用策略，调用features判断情绪，节点，强度，主动。
-│   └── ma_strategy.py     # 双均线策略，个人策略，各大佬策略
-├── backtest/     #支持模拟回搠，输入历史数据，调用策略，结束策略，模拟收益。计算偏离，机器学习，最终微调策略。
-│   ├── engine.py        # 回测引擎
-│   └── metrics.py         # 回测指标
-    └── backtest.log       # 回测详细记录
-├── learnEngine/            #机器学习模型
-│   ├──
-│   └──
-├── data_realtime/            #实时数据获取
-│   ├──
-│   └──
-├── utils/
-        logs               #日志记录
-│   └── common.py          # 工具函数
-└── main.py                # 程序入口
+QuantTradingSystem/
+├── main.py                 # 项目入口（驱动回测/训练/实时监控）
+├── requirements.txt        # 依赖清单
+├── config/                 # 配置层
+│   ├── .env                # 环境变量（敏感配置）
+│   └── config.py           # 配置加载工具
+├── data/                   # 历史数据层
+│   ├── data_fetcher.py     # 历史行情/基本面数据拉取
+│   ├── data_cleaner.py     # 数据清洗（去重/补全/格式转换）
+│   └── autoUpdating.py     # 数据自动更新脚本
+├── data_realtime/          # 实时数据层
+│   └── data_realtmeFetcher.py  # 实时行情拉取（注：文件名待优化：realtme→realtime）
+├── strategies/             # 策略层
+│   ├── base_strategy.py    # 策略抽象基类（封装通用逻辑）
+│   ├── limit_up_strategy.py # 涨停策略实现
+│   ├── multi_limit_up_strategy.py # 多涨停策略实现
+│   └── A_ector_heat_strategy.py                #板块热度选股策略
+├── backtest/               # 回测层
+│   ├── engine.py           # 回测引擎（核心：逐K线模拟交易）
+│   ├── account.py          # 模拟账户（持仓/资金/订单管理）
+│   └── metrics.py          # 回测绩效指标（夏普比率/最大回撤/胜率等）
+├── learnEngine/            # 机器学习层
+│   ├── dataset.py          # 量化数据集构建（数据+特征）
+│   ├── lable.py            # 交易标签生成（注：文件名待优化：lable→label）
+│   └── modle.py            # 模型训练/评估/推理（注：文件名待优化：modle→model）
+├── features/               # 特征工程层
+│   └── technical_indicator.py # 技术指标（MA/RSI/MACD等）
+│   └── base_feature.py      #特征基类
+│   └── ma_indicator.py        #均线计算
+│   └── macd_indicator.py       #macd金叉死叉计算
+│   └── market_stats.py            #板块热度因子计算
+└── utils/                  # 通用工具层
+    ├── common_tools.py     # 通用函数（时间转换/数据格式）
+    ├── db_utils.py         # 数据库操作（读写数据）
+    ├── log_utils.py        # 日志管理
+    └── wechat_push.py      # 微信消息推送
