@@ -21,6 +21,13 @@ from utils.log_utils import logger
 UPDATE_RECORD_FILE = Path(__file__).parent.parent / "data" / "update_record.json"
 DEFAULT_FIRST_UPDATE_DATE = "2024-01-01"
 
+default_exclude = [
+    "融资融券", "转融券标的", "标普道琼斯A股", '军工', '核准制次新股', '腾讯概念', '阿里巴巴概念', '抖音概念',
+    "MSCI概念", "深股通", "沪股通", '一带一路', '新股与次新股', '节能环保','稀缺资源','锂电池',
+    "同花顺漂亮100", "富时罗素概念", "富时罗素概念股", '比亚迪概念', '5G', '小金属概念','参股银行',
+    "央企国资改革", "地方国资改革", "证金持股", '新能源汽车', '次新股', '宁德时代概念',
+    "汇金持股", "养老金持股", "QFII重仓", "专精特新", 'MSCI中国', '半年报预增', '华为概念', '光伏概念', '储能'
+]
 
 
 
@@ -39,6 +46,9 @@ def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:
     :return: DataFrame（列：ts_code、pct_chg），按pct_chg正序排列；查询失败/无数据返回None
     """
     # ==================== 2. 构建筛选SQL（精准区分板块涨幅阈值） ====================
+    logger.info('*'*60)
+    logger.info('！！！！！！历史数据，非实时数据，仅供模拟训练！！！！！！！')
+    logger.info('*'*60)
     sql = f"""
         SELECT ts_code, pct_chg
         FROM kline_day
@@ -65,8 +75,8 @@ def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:
     result_df = result_df.rename(columns=str.lower).loc[:, ['ts_code', 'pct_chg']]
     # 再次确认按pct_chg正序排列（防止SQL排序失效）
     result_df = result_df.sort_values(by='pct_chg', ascending=True).reset_index(drop=True)
-
     logger.info(f"{trade_date}共查询到{len(result_df)}只符合条件的股票")
+
     return result_df
 
 
@@ -85,13 +95,6 @@ def getTagRank_daily(
     """
     # ==================== 0. 初始化默认黑名单 ====================
     # 默认过滤掉常见的无分析性题材，用户可通过参数覆盖
-    default_exclude = [
-        "融资融券", "转融券标的", "标普道琼斯A股",'军工','核准制次新股',
-        "MSCI概念", "深股通", "沪股通",'一带一路','新股与次新股',
-        "同花顺漂亮100", "富时罗素概念", "富时罗素概念股",'比亚迪概念','5G',
-        "央企国资改革", "地方国资改革", "证金持股",'新能源汽车','次新股',
-        "汇金持股", "养老金持股", "QFII重仓","专精特新",'MSCI中国','半年报预增','华为概念','光伏概念','储能'
-    ]
     if exclude_concepts is None:
         exclude_concepts = default_exclude
     else:
@@ -176,6 +179,142 @@ def getTagRank_daily(
     # ==================== 6. 结果输出 ====================
     logger.info(f"题材统计完成，前5名题材：\n{result_df.to_string(index=False)}")
     return result_df
+
+def select_top3_hot_sectors(trade_date: str) -> Dict:
+    """
+    板块热度计算主入口（策略运行时轻量化调用）
+    :param trade_date: D日日期，格式yyyy-mm-dd
+    :return: 结果字典
+        {
+            "top3_sectors": List[str] 最终选中的3个板块（按热度降序）
+            "adapt_score": int 降档适配分数（100/80/50/20），分数越低轮动越快赚钱效应越弱
+        }
+    """
+    # 固定配置（核心参数统一管理，无冗余）
+    TIME_WEIGHT_MAP = {0: 1.0, -1: 0.9, -2: 0.8, -3: 0.7, -4: 0.6}
+    SCORE_MAP = {"core": 100, "relax": 80, "min": 50, "bottom": 20}
+    TOTAL_DAYS = 5
+
+    # -------------------- 1. 极简基础校验 --------------------
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', trade_date):
+        logger.error(f"[板块热度] 日期格式错误：{trade_date}，要求yyyy-mm-dd")
+        return {"top3_sectors": [], "adapt_score": 0}
+
+    # -------------------- 2. 获取5个连续交易日 --------------------
+    try:
+        # 计算起始日（D日往前推20天，覆盖非交易日）
+        d_date = datetime.strptime(trade_date, "%Y-%m-%d")
+        start_date = (d_date - timedelta(days=20)).strftime("%Y-%m-%d")
+
+        sql = """
+              SELECT cal_date
+              FROM trade_cal
+              WHERE cal_date BETWEEN %s AND %s \
+                AND is_open = 1
+              ORDER BY cal_date ASC \
+              """
+        df = db.query(sql, params=(start_date, trade_date), return_df=True)
+        if df.empty:
+            logger.error(f"[板块热度] 未查询到{start_date}至{trade_date}的交易日数据")
+            return {"top3_sectors": [], "adapt_score": 0}
+
+        # 提取交易日列表，取最后5个（D-4到D日）
+        all_trade_dates = df["cal_date"].astype(str).tolist()
+        trade_dates = all_trade_dates[-TOTAL_DAYS:]
+        if len(trade_dates) != TOTAL_DAYS:
+            logger.error(f"[板块热度] 获取交易日失败，仅拿到{len(trade_dates)}个，要求5个")
+            return {"top3_sectors": [], "adapt_score": 0}
+        logger.debug(f"[板块热度] 成功获取5个交易日：{trade_dates}")
+    except Exception as e:
+        logger.error(f"[板块热度] 获取交易日异常：{str(e)}")
+        return {"top3_sectors": [], "adapt_score": 0}
+
+    # -------------------- 3. 逐天生成榜单数据 --------------------
+    daily_board_data = []
+    for idx, day in enumerate(trade_dates):
+        distance = idx - 4  # 严格绑定：D-4→-4，D日→0，权重绝对不反向
+        try:
+            # 步骤1：获取当日符合阈值的股票列表
+            stock_df = getStockRank_fortraining(day)
+            if stock_df.empty or "ts_code" not in stock_df.columns:
+                logger.warning(f"[板块热度] {day} 无符合条件的股票，跳过")
+                continue
+            ts_list = stock_df["ts_code"].dropna().unique().tolist()
+
+            # 步骤2：获取当日热度前5板块
+            tag_df = getTagRank_daily(ts_list)
+            if tag_df.empty or "concept_name" not in tag_df.columns:
+                logger.warning(f"[板块热度] {day} 无板块数据，跳过")
+                continue
+            tag_df = tag_df.head(5).reset_index(drop=True)
+
+            # 步骤3：转换为标准榜单格式
+            daily_board = [{"rank": i+1, "name": str(row["concept_name"]).strip()} for i, row in tag_df.iterrows()]
+            daily_board_data.append({"distance": distance, "board": daily_board})
+
+        except Exception as e:
+            logger.warning(f"[板块热度] {day} 数据处理失败：{str(e)}，跳过")
+            continue
+
+    # 最低有效数据校验（至少3天有效数据，避免结果失真）
+    if len(daily_board_data) < 3:
+        logger.error(f"[板块热度] 有效交易日不足3个，无法计算")
+        return {"top3_sectors": [], "adapt_score": 0}
+    logger.debug(f"[板块热度] 成功生成{(daily_board_data)}待计算热度数据")
+
+    # -------------------- 4. 核心热度统计（已验证无逻辑错误） --------------------
+    sector_stats = {}
+    for daily_data in daily_board_data:
+        distance = daily_data["distance"]
+        time_weight = TIME_WEIGHT_MAP[distance]
+        board = daily_data["board"]
+        unique_sectors = set()  # 单日去重，避免统计失真
+
+        for sector in board:
+            name, rank = sector["name"], sector["rank"]
+            if name in unique_sectors:
+                continue
+            unique_sectors.add(name)
+
+            # 初始化+更新统计
+            if name not in sector_stats:
+                sector_stats[name] = {"appear_count": 0, "has_top3": False, "total_score": 0.0}
+            sector_stats[name]["appear_count"] += 1
+            sector_stats[name]["has_top3"] |= (rank <= 3)
+            sector_stats[name]["total_score"] += (6 - rank) * time_weight
+
+    if not sector_stats:
+        logger.error(f"[板块热度] 无有效板块统计数据")
+        return {"top3_sectors": [], "adapt_score": 0}
+
+    # -------------------- 5. 分层筛选+适配分计算 --------------------
+    filter_level = "core"
+    filtered = {n: s for n, s in sector_stats.items() if s["appear_count"] >= 3 and s["has_top3"]}
+
+    if len(filtered) < 3:
+        filter_level = "relax"
+        filtered = {n: s for n, s in sector_stats.items() if s["appear_count"] >= 2 and s["has_top3"]}
+    if len(filtered) < 3:
+        filter_level = "min"
+        filtered = {n: s for n, s in sector_stats.items() if s["has_top3"]}
+    if len(filtered) == 0:
+        filter_level = "bottom"
+        filtered = sector_stats
+
+    # -------------------- 6. 结果排序+输出 --------------------
+    sorted_sectors = sorted(
+        filtered.items(),
+        key=lambda x: (x[1]["total_score"], x[1]["appear_count"]),
+        reverse=True
+    )
+    final_top3 = [item[0] for item in sorted_sectors[:3]]
+    adapt_score = SCORE_MAP[filter_level]
+
+    # 仅保留核心结果info日志
+    logger.info(f"[板块热度] 计算完成 | 基准日：{trade_date} | 适配分：{adapt_score} | 最终TOP3：{final_top3}")
+
+    return {"top3_sectors": final_top3, "adapt_score": adapt_score}
+
 
 # # 每日开盘前执行一次，缓存全量题材数据
 # def cache_all_concept_data():
@@ -494,7 +633,6 @@ def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
     return decorator
 
 if __name__ == "__main__":
-    stock_rank_df = getStockRank_fortraining('20260210')
-    ts_code_list = stock_rank_df['ts_code'].tolist()
-    tag_rank_df = getTagRank_daily(ts_code_list)
+    result = select_top3_hot_sectors(trade_date="2024-02-10")
+    print(result)
 

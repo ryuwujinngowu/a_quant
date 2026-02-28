@@ -8,8 +8,8 @@ from strategies.limit_up_strategy import  LimitUpHoldStrategy
 
 def main():
     # ===================== 回测参数配置 =====================
-    START_DATE = "2025-03-27"  # 回测开始日期
-    END_DATE = "2025-04-27"    # 回测结束日期
+    START_DATE = "2019-01-01"  # 回测开始日期
+    END_DATE = "2026-10-01"    # 回测结束日期
     INIT_CAPITAL = DEFAULT_INIT_CAPITAL  # 初始本金10W元
 
     # ===================== 初始化策略与回测引擎 =====================

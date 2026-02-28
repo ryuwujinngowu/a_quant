@@ -41,7 +41,7 @@ class MultiStockBacktestEngine:
     def init_trade_cal(self) -> list:
         """初始化交易日历：回测前拉取、入库，返回准确的交易日列表"""
         logger.info(f"===== 初始化回测交易日历：{self.start_date} 至 {self.end_date} =====")
-        data_cleaner.truncate_trade_cal_table()
+        #data_cleaner.truncate_trade_cal_table()
         # 1. 拉取回测时间段的完整交易日历
         raw_cal_df = data_fetcher.fetch_trade_cal(
             start_date=self.start_date,
@@ -89,7 +89,7 @@ class MultiStockBacktestEngine:
         # 初始化策略
         self.strategy.initialize()
         # 回测前清空临时表
-        data_cleaner.truncate_kline_min_table()
+        # data_cleaner.truncate_kline_min_table()
 
         # 按交易日循环执行（仅交易日，无休市日）
         for idx, trade_date in enumerate(self.trade_dates):
@@ -226,8 +226,8 @@ class MultiStockBacktestEngine:
         logger.info("=" * 60)
 
         # 回测结束清空临时表
-        data_cleaner.truncate_kline_min_table()
-        data_cleaner.truncate_trade_cal_table()
+        #data_cleaner.truncate_kline_min_table()
+        #data_cleaner.truncate_trade_cal_table()
 
         # 附加详细数据
         self.result["net_value_df"] = net_value_df

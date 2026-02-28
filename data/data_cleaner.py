@@ -503,13 +503,13 @@ class DataCleaner:
         return pd.DataFrame()
 
 
-    def truncate_kline_min_table(self, table_name: str = "kline_min"):
-        """清空分钟线表（精简逻辑）"""
-        try:
-            db.execute(f"TRUNCATE TABLE {table_name}")
-            logger.info(f"分钟线表{table_name}清空完成")
-        except Exception as e:
-            logger.error(f"分钟线表清空失败：{str(e)}", exc_info=True)
+    # def truncate_kline_min_table(self, table_name: str = "kline_min"):
+    #     """清空分钟线表（精简逻辑）"""
+    #     try:
+    #         db.execute(f"TRUNCATE TABLE {table_name}")
+    #         logger.info(f"分钟线表{table_name}清空完成")
+    #     except Exception as e:
+    #         logger.error(f"分钟线表清空失败：{str(e)}", exc_info=True)
 
     def _clean_trade_cal_data(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """交易日历数据清洗（精简逻辑）"""
@@ -589,13 +589,13 @@ class DataCleaner:
 
         return df["pretrade_date"].iloc[0].strftime("%Y-%m-%d")
 
-    def truncate_trade_cal_table(self, table_name: str = "trade_cal"):
-        """清空交易日历表（精简逻辑）"""
-        try:
-            db.execute(f"TRUNCATE TABLE {table_name}")
-            logger.info(f"交易日历表{table_name}清空完成")
-        except Exception as e:
-            logger.error(f"交易日历表清空失败：{str(e)}", exc_info=True)
+    # def truncate_trade_cal_table(self, table_name: str = "trade_cal"):
+    #     """清空交易日历表（精简逻辑）"""
+    #     try:
+    #         db.execute(f"TRUNCATE TABLE {table_name}")
+    #         logger.info(f"交易日历表{table_name}清空完成")
+    #     except Exception as e:
+    #         logger.error(f"交易日历表清空失败：{str(e)}", exc_info=True)
 
     def clean_and_insert_kline_day_qfq(
             self,
@@ -721,6 +721,7 @@ class DataCleaner:
         if failed_codes:
             logger.warning(f"失败股票代码：{failed_codes}")
         return total_ingest_rows
+
 
     def insert_stock_daily_basic(self,
             ts_code: str,  # 支持单股票代码/多股票代码列表

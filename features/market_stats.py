@@ -42,6 +42,7 @@ class SectorHeatFeature(BaseFeature):
             - sector_factor_df: 板块因子DataFrame，index=板块ID，columns=30个因子列
             - top_sector_ids: 当日前3活跃板块ID列表 [1,2,3]
             - stock_sector_map: 个股-所属板块映射 {ts_code: 所属板块ID}
+
         """
         # ==================== 后续填充具体计算逻辑 ====================
         # 1. 计算每日板块热度，筛选前3活跃板块，分配板块ID 1/2/3

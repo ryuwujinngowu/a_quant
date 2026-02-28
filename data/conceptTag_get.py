@@ -204,13 +204,20 @@ def batch_update_with_single_fail_log(params_list: List[tuple]) -> int:
     return success_count
 
 
-def update_all_stock_concept_tags(batch_size: int = 20):
+def update_all_stock_concept_tags(
+        batch_size: int = 20,
+        ts_code: list = None,  # 移除Optional，直接用list（新手更易理解，且无导入报错）
+        update: bool = True
+):
     """
     【核心新增】逐批更新全表，直到全部完成
     1. 有序分页（按ts_code，不漏不重）
     2. 自动分批
     3. 单条失败打error日志
     4. 统计总Token
+    新增参数：
+        ts_code: 股票代码列表，传值则仅查询该列表范围内的股票；不传则查全表
+        update: 是否仅更新concept_tags为空的股票（True=增量更新，False=全量重新查），默认True
     """
 
     logger.info("===== 开始全量更新 stock_basic 所有股票 concept_tags =====")
@@ -221,12 +228,33 @@ def update_all_stock_concept_tags(batch_size: int = 20):
 
     while True:
         batch_index += 1
-        # 有序分页（按ts_code，绝对不漏不重）
-        if not last_ts_code:
-            read_sql = f"SELECT ts_code, name FROM stock_basic WHERE concept_tags IS NULL ORDER BY ts_code LIMIT {batch_size}"
-        else:
-            read_sql = f"SELECT ts_code, name FROM stock_basic WHERE ts_code > '{last_ts_code}' AND concept_tags IS NULL ORDER BY ts_code LIMIT {batch_size}"
+        # ==================== 重构SQL拼接逻辑（核心修改） ====================
+        # 基础SELECT语句
+        base_sql = "SELECT ts_code, name FROM stock_basic"
+        # 构建WHERE条件列表
+        where_conditions = []
 
+        # 1. 股票代码列表条件（传值则限定范围）
+        if ts_code and len(ts_code) > 0:
+            # 拼接IN条件（处理列表转SQL格式）
+            ts_code_str = ','.join([f"'{code}'" for code in ts_code])
+            where_conditions.append(f"ts_code IN ({ts_code_str})")
+
+        # 2. 分页条件（ts_code > last_ts_code）
+        if last_ts_code:
+            where_conditions.append(f"ts_code > '{last_ts_code}'")
+
+        # 3. update参数条件（True=仅查concept_tags为空，False=不限制）
+        if update:
+            where_conditions.append("concept_tags IS NULL")
+
+        # 拼接完整SQL
+        if where_conditions:
+            read_sql = f"{base_sql} WHERE {' AND '.join(where_conditions)} ORDER BY ts_code LIMIT {batch_size}"
+        else:
+            read_sql = f"{base_sql} ORDER BY ts_code LIMIT {batch_size}"
+
+        # ==================== 原有逻辑保持不变 ====================
         stock_batch = db.query(read_sql)
         if not stock_batch or len(stock_batch) == 0:
             logger.info("===== 全量更新完成！无更多股票 =====")
@@ -259,12 +287,5 @@ def update_all_stock_concept_tags(batch_size: int = 20):
 
 
 if __name__ == "__main__":
-    # 初始化Token文件
-    # init_token_file("token_usage.json", force=False)
-
-    # 你可以选：
-    # 1. 测试20只（原有功能）
-    # update_concept_tags_for_20_stocks()
-
-    # 2. 全量更新（正式运行）
-    update_all_stock_concept_tags(batch_size=20)
+    #默认update= True，只做增量更新没有标签的股票。
+    update_all_stock_concept_tags(batch_size=20,update= True,ts_code=[])

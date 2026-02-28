@@ -401,16 +401,72 @@ class DataFetcher:
             return pd.DataFrame()
 
 
+    def fetch_ths_hot(
+            self,
+            trade_date: Optional[str] = None,
+            ts_code: Optional[str] = None,
+            market: Optional[str] = None,
+            is_new: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取同花顺热榜数据，涵盖热股、ETF、行业板块等多类型热榜信息
+        接口文档：同花顺热榜数据
+        限量：未明确标注（保持原有风格）
+        积分：未明确标注（保持原有风格）
+
+        Args:
+            trade_date: 交易日期（格式未指定，按接口要求传入）
+            ts_code: TS代码（如000001.SZ、600000.SH）
+            market: 热榜类型(热股、ETF、可转债、行业板块、概念板块、期货、港股、热基、美股)
+            is_new: 是否最新（默认Y，如果为N则为盘中和盘后阶段采集，具体时间可参考rank_time字段，状态N每小时更新一次，状态Y更新时间为22：30）
+
+        Returns:
+            同花顺热榜数据DataFrame（空数据返回空DataFrame）
+        """
+        params = _filter_empty_params({
+            "trade_date": trade_date,
+            "ts_code": ts_code,
+            "market": market,
+            "is_new": is_new,
+        })
+
+        try:
+            hot_df = self.pro.ths_hot(** params)  # 适配新接口名ths_hot
+            logger.debug(f"获取同花顺热榜数据，参数：{ts_code}/{trade_date}/{market}，行数：{len(hot_df)}")
+
+            if hot_df.empty:
+                logger.warning(f"获取同花顺热榜数据为空，参数：{params}")
+
+            return hot_df
+        except Exception as e:
+            logger.error(f"同花顺热榜数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+
+
 
 # ===================== 全局实例（保持原命名，不影响调用） =====================
 data_fetcher = DataFetcher()
 
 if __name__ == "__main__":
-    pass
+    # pass
         # 初始化DataFetcher实例
-        # data_fetcher = DataFetcher()
+        data_fetcher = DataFetcher()
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', None)
+        # 1. 测试同花顺热榜-热股类型最新数据获取
+        logger.info("===== 测试1：获取同花顺热榜-热股最新数据 =====")
+        ths_hot_df = data_fetcher.fetch_ths_hot(
+            trade_date="20260226",  # 测试日期（按需调整）
+            market="热股",  # 热榜类型：热股
+            is_new="Y"  # 获取最新数据
+        )
+        if not ths_hot_df.empty:
+            logger.info(f"同花顺热榜数据预览（前3行）：\n{ths_hot_df}")
+        else:
+            logger.warning("同花顺热榜数据为空（可能日期未开盘/无数据）")
 
-        # 1. 测试单只股票单日期技术面因子获取
+        # # 1. 测试单只股票单日期技术面因子获取
         # logger.info("===== 测试1：获取单只股票单日期技术面因子 =====")
         # single_stock_single_day_df = data_fetcher.fetch_stk_factor_pro(
         #     ts_code="000001.SZ",  # 平安银行
