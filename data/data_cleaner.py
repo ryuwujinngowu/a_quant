@@ -1,10 +1,8 @@
 import datetime
 import time
 from typing import Optional, List, Union
-
 import numpy as np
 import pandas as pd
-
 from data.data_fetcher import data_fetcher
 from utils.common_tools import auto_add_missing_table_columns
 from utils.common_tools import calc_15_years_date_range
@@ -160,14 +158,14 @@ class DataCleaner:
         # 3. 自动新增缺失字段（复用自身通用方法，删除冗余逻辑）
         db_cols = self._get_db_columns(table_name)
         missing_cols = [col for col in cleaned_df.columns if col not in db_cols]
-        if missing_cols:
-            logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
-            add_success = auto_add_missing_table_columns(
-                table_name=table_name,
-                missing_columns=missing_cols
-            )
-            if not add_success:
-                logger.warning(f"表{table_name}部分字段新增失败，继续执行")
+        # if missing_cols:
+        #     logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
+        #     add_success = auto_add_missing_table_columns(
+        #         table_name=table_name,
+        #         missing_columns=missing_cols
+        #     )
+        #     if not add_success:
+        #         logger.warning(f"表{table_name}部分字段新增失败，继续执行")
 
         # 4. 对齐数据库字段并入库
         final_df = self._align_df_with_db(cleaned_df, table_name)
@@ -247,110 +245,110 @@ class DataCleaner:
         logger.debug(f"日K数据清洗完成：原始{len(raw_df)}行 → 清洗后{len(df_cleaned)}行")
         return df_cleaned
 
-    def clean_and_insert_kline_day(self, table_name: str = "kline_day") -> Optional[int]:
-        """全市场A股近15年日K数据清洗入库（优化：减少数据库查询次数）"""
-        logger.info("===== 开始全市场A股日K数据清洗入库 =====")
-
-        # 1. 前置准备（一次性获取，避免循环内重复查询）
-        stock_codes = db.get_all_a_stock_codes()
-        if not stock_codes:
-            logger.error("无有效股票代码，终止入库")
-            return 0
-
-        start_date, end_date = calc_15_years_date_range()
-        # 提前获取数据库字段（循环内复用）
-        db_cols = self._get_db_columns(table_name)
-        # 提前定义kline_day字段类型映射
-        kline_col_map = {
-            "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
-            "trade_date": "DATE NOT NULL DEFAULT '1970-01-01'",
-            "open": "FLOAT DEFAULT 0",
-            "high": "FLOAT DEFAULT 0",
-            "low": "FLOAT DEFAULT 0",
-            "close": "FLOAT DEFAULT 0",
-            "pre_close": "FLOAT DEFAULT 0",
-            "change1": "FLOAT DEFAULT 0",
-            "pct_chg": "FLOAT DEFAULT 0",
-            "volume": "BIGINT DEFAULT 0",
-            "amount": "DECIMAL(18,2) DEFAULT 0.00",
-            "turnover_rate": "FLOAT DEFAULT 0",
-            "swing": "FLOAT DEFAULT 0",
-            "limit_up": "FLOAT DEFAULT 0",
-            "limit_down": "FLOAT DEFAULT 0",
-            "update_time": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            "reserved": "VARCHAR(128) DEFAULT ''"
-        }
-
-        # 2. 初始化统计指标
-        total_success = 0
-        total_failed = 0
-        total_ingest_rows = 0
-        failed_codes = []
-
-        # 3. 循环处理股票（优化：减少重复逻辑）
-        for idx, ts_code in enumerate(stock_codes):
-            logger.info(f"处理进度：{idx + 1}/{len(stock_codes)} | 股票代码：{ts_code}")
-            try:
-                # 获取原始数据
-                raw_df = data_fetcher.fetch_kline_day(ts_code=ts_code, start_date=start_date, end_date=end_date)
-                if raw_df.empty:
-                    logger.warning(f"{ts_code} 无日K数据，跳过")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
-                    continue
-
-                # 清洗数据
-                cleaned_df = self._clean_kline_day_data(raw_df)
-                if cleaned_df.empty:
-                    logger.warning(f"{ts_code} 清洗后无有效数据，跳过")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
-                    continue
-
-                # 自动新增缺失字段（复用通用方法）
-                missing_cols = [col for col in cleaned_df.columns if col not in db_cols]
-                if missing_cols:
-                    logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
-                    auto_add_missing_table_columns(
-                        table_name=table_name,
-                        missing_columns=missing_cols,
-                        col_type_mapping=kline_col_map
-                    )
-                    # 刷新数据库字段（仅当有新增时）
-                    db_cols = self._get_db_columns(table_name)
-
-                # 对齐数据库字段
-                final_df = self._align_df_with_db(cleaned_df, table_name)
-
-                # 批量入库
-                affected_rows = db.batch_insert_df(
-                    df=final_df,
-                    table_name=table_name,
-                    ignore_duplicate=True
-                )
-                if affected_rows:
-                    total_ingest_rows += affected_rows
-                    total_success += 1
-                    logger.info(f"{ts_code} 日K数据入库完成，影响行数：{affected_rows}")
-                else:
-                    logger.warning(f"{ts_code} 入库无影响行数")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
-
-            except Exception as e:
-                logger.error(f"{ts_code} 处理失败：{str(e)}", exc_info=True)
-                total_failed += 1
-                failed_codes.append(ts_code)
-                continue
-
-        # 4. 汇总结果（精简日志）
-        logger.info("===== 全市场日K数据入库汇总 =====")
-        logger.info(f"总处理股票数：{len(stock_codes)} | 成功：{total_success} | 失败：{total_failed}")
-        logger.info(f"累计入库/更新行数：{total_ingest_rows}")
-        if failed_codes:
-            logger.warning(f"失败股票代码（前20）：{failed_codes}")
-
-        return total_ingest_rows
+    # def clean_and_insert_kline_day(self, table_name: str = "kline_day") -> Optional[int]:
+    #     """全市场A股近15年日K数据清洗入库（优化：减少数据库查询次数）"""
+    #     logger.info("===== 开始全市场A股日K数据清洗入库 =====")
+    #
+    #     # 1. 前置准备（一次性获取，避免循环内重复查询）
+    #     stock_codes = db.get_all_a_stock_codes()
+    #     if not stock_codes:
+    #         logger.error("无有效股票代码，终止入库")
+    #         return 0
+    #
+    #     start_date, end_date = calc_15_years_date_range()
+    #     # 提前获取数据库字段（循环内复用）
+    #     db_cols = self._get_db_columns(table_name)
+    #     # 提前定义kline_day字段类型映射
+    #     kline_col_map = {
+    #         "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
+    #         "trade_date": "DATE NOT NULL DEFAULT '1970-01-01'",
+    #         "open": "FLOAT DEFAULT 0",
+    #         "high": "FLOAT DEFAULT 0",
+    #         "low": "FLOAT DEFAULT 0",
+    #         "close": "FLOAT DEFAULT 0",
+    #         "pre_close": "FLOAT DEFAULT 0",
+    #         "change1": "FLOAT DEFAULT 0",
+    #         "pct_chg": "FLOAT DEFAULT 0",
+    #         "volume": "BIGINT DEFAULT 0",
+    #         "amount": "DECIMAL(18,2) DEFAULT 0.00",
+    #         "turnover_rate": "FLOAT DEFAULT 0",
+    #         "swing": "FLOAT DEFAULT 0",
+    #         "limit_up": "FLOAT DEFAULT 0",
+    #         "limit_down": "FLOAT DEFAULT 0",
+    #         "update_time": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    #         "reserved": "VARCHAR(128) DEFAULT ''"
+    #     }
+    #
+    #     # 2. 初始化统计指标
+    #     total_success = 0
+    #     total_failed = 0
+    #     total_ingest_rows = 0
+    #     failed_codes = []
+    #
+    #     # 3. 循环处理股票（优化：减少重复逻辑）
+    #     for idx, ts_code in enumerate(stock_codes):
+    #         logger.info(f"处理进度：{idx + 1}/{len(stock_codes)} | 股票代码：{ts_code}")
+    #         try:
+    #             # 获取原始数据
+    #             raw_df = data_fetcher.fetch_kline_day(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    #             if raw_df.empty:
+    #                 logger.warning(f"{ts_code} 无日K数据，跳过")
+    #                 total_failed += 1
+    #                 failed_codes.append(ts_code)
+    #                 continue
+    #
+    #             # 清洗数据
+    #             cleaned_df = self._clean_kline_day_data(raw_df)
+    #             if cleaned_df.empty:
+    #                 logger.warning(f"{ts_code} 清洗后无有效数据，跳过")
+    #                 total_failed += 1
+    #                 failed_codes.append(ts_code)
+    #                 continue
+    #
+    #             # 自动新增缺失字段（复用通用方法）
+    #             missing_cols = [col for col in cleaned_df.columns if col not in db_cols]
+    #             # if missing_cols:
+    #             #     logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
+    #             #     auto_add_missing_table_columns(
+    #             #         table_name=table_name,
+    #             #         missing_columns=missing_cols,
+    #             #         col_type_mapping=kline_col_map
+    #             #     )
+    #             #     # 刷新数据库字段（仅当有新增时）
+    #             #     db_cols = self._get_db_columns(table_name)
+    #
+    #             # 对齐数据库字段
+    #             final_df = self._align_df_with_db(cleaned_df, table_name)
+    #
+    #             # 批量入库
+    #             affected_rows = db.batch_insert_df(
+    #                 df=final_df,
+    #                 table_name=table_name,
+    #                 ignore_duplicate=True
+    #             )
+    #             if affected_rows:
+    #                 total_ingest_rows += affected_rows
+    #                 total_success += 1
+    #                 logger.info(f"{ts_code} 日K数据入库完成，影响行数：{affected_rows}")
+    #             else:
+    #                 logger.warning(f"{ts_code} 入库无影响行数")
+    #                 total_failed += 1
+    #                 failed_codes.append(ts_code)
+    #
+    #         except Exception as e:
+    #             logger.error(f"{ts_code} 处理失败：{str(e)}", exc_info=True)
+    #             total_failed += 1
+    #             failed_codes.append(ts_code)
+    #             continue
+    #
+    #     # 4. 汇总结果（精简日志）
+    #     logger.info("===== 全市场日K数据入库汇总 =====")
+    #     logger.info(f"总处理股票数：{len(stock_codes)} | 成功：{total_success} | 失败：{total_failed}")
+    #     logger.info(f"累计入库/更新行数：{total_ingest_rows}")
+    #     if failed_codes:
+    #         logger.warning(f"失败股票代码（前20）：{failed_codes}")
+    #
+    #     return total_ingest_rows
 
     def clean_and_insert_index_daily(
             self,
@@ -685,16 +683,16 @@ class DataCleaner:
 
                 # 自动新增缺失字段（复用通用方法）
                 missing_cols = [col for col in cleaned_df.columns if col not in db_cols]
-                if missing_cols:
-                    logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
-                    auto_add_missing_table_columns(
-                        table_name=table_name,
-                        missing_columns=missing_cols,
-                        col_type_mapping=kline_col_map
-                    )
-                    db_cols = self._get_db_columns(table_name)  # 刷新字段
-
-                # 对齐数据库字段（复用通用方法）
+                # if missing_cols:
+                #     logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
+                #     auto_add_missing_table_columns(
+                #         table_name=table_name,
+                #         missing_columns=missing_cols,
+                #         col_type_mapping=kline_col_map
+                #     )
+                #     db_cols = self._get_db_columns(table_name)  # 刷新字段
+                #
+                # # 对齐数据库字段（复用通用方法）
                 final_df = self._align_df_with_db(cleaned_df, table_name)
 
                 # 批量入库（复用db工具）

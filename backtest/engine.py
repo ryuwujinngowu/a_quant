@@ -1,6 +1,6 @@
 import pandas as pd
 from config.config import MAX_POSITION_COUNT
-
+from utils.common_tools import get_trade_dates,get_daily_kline_data
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
 from data.data_cleaner import data_cleaner
@@ -27,8 +27,6 @@ class MultiStockBacktestEngine:
         self.end_date = end_date
         # 初始化账户
         self.account = Account(init_capital=init_capital, max_position_count=MAX_POSITION_COUNT)
-        # 回测交易日列表
-        self.trade_dates = self.init_trade_cal()
         # 回测结果
         self.result = {}
         self.account.set_backtest_info(
@@ -38,49 +36,6 @@ class MultiStockBacktestEngine:
         )
 
 
-    def init_trade_cal(self) -> list:
-        """初始化交易日历：回测前拉取、入库，返回准确的交易日列表"""
-        logger.info(f"===== 初始化回测交易日历：{self.start_date} 至 {self.end_date} =====")
-        #data_cleaner.truncate_trade_cal_table()
-        # 1. 拉取回测时间段的完整交易日历
-        raw_cal_df = data_fetcher.fetch_trade_cal(
-            start_date=self.start_date,
-            end_date=self.end_date,
-            exchange="SSE"
-        )
-        if raw_cal_df.empty:
-            logger.critical("交易日历获取失败，终止回测")
-            raise RuntimeError("交易日历获取失败，请检查接口权限或网络")
-
-        # 2. 清洗入库
-        data_cleaner.clean_and_insert_trade_cal(raw_cal_df)
-
-        # 3. 获取交易日列表（仅is_open=1）
-        trade_dates = data_cleaner.get_trade_dates(self.start_date, self.end_date)
-        if not trade_dates:
-            logger.critical("回测时间段内无有效交易日，终止回测")
-            raise RuntimeError("回测时间段内无有效交易日")
-
-        logger.info(f"交易日历初始化完成，有效交易日数量：{len(trade_dates)}")
-        return trade_dates
-
-    def get_daily_kline_data(self, trade_date: str) -> pd.DataFrame:
-        """获取指定日期全市场日线数据（仅交易日执行，杜绝无效请求）"""
-        logger.debug(f"开始获取日线数据: {trade_date}")
-        trade_date_format = trade_date.replace("-", "")
-        # 优先从数据库读取
-        sql = """
-              SELECT ts_code, trade_date, open, high, low, close, pre_close, volume, amount
-              FROM kline_day
-              WHERE trade_date = %s \
-              """
-        df = db.query(sql, params=(trade_date_format,), return_df=True)
-        if df is not None and not df.empty:
-            logger.debug(f"{trade_date} 日线数据从数据库读取完成，行数：{len(df)}")
-            return df
-        else:
-            logger.error(f"{trade_date} 日线数据拉取失败，跳过当日")
-            return pd.DataFrame()
 
     def run(self) -> dict:
         """执行回测核心流程"""
@@ -88,14 +43,11 @@ class MultiStockBacktestEngine:
             f"===== 开始回测，初始本金：{self.init_capital}元，回测时间段：{self.start_date} 至 {self.end_date} =====")
         # 初始化策略
         self.strategy.initialize()
-        # 回测前清空临时表
-        # data_cleaner.truncate_kline_min_table()
-
-        # 按交易日循环执行（仅交易日，无休市日）
-        for idx, trade_date in enumerate(self.trade_dates):
-            logger.info(f"===== 处理交易日：{trade_date}（第{idx + 1}/{len(self.trade_dates)}天） =====")
+        trade_dates = get_trade_dates(self.start_date, self.end_date)
+        for idx, trade_date in enumerate(trade_dates):
+            logger.info(f"===== 处理交易日：{trade_date}（第{idx + 1}/{len(trade_dates)}天） =====")
             # 1. 获取当日全市场日线数据
-            daily_df = self.get_daily_kline_data(trade_date)
+            daily_df = get_daily_kline_data(trade_date)
             if daily_df.empty:
                 logger.warning(f"{trade_date} 无有效日线数据，跳过当日")
                 continue
@@ -185,8 +137,8 @@ class MultiStockBacktestEngine:
 
         # 回测结束，强制清仓剩余持仓
         logger.info("===== 回测结束，强制清仓剩余持仓 =====")
-        last_date = self.trade_dates[-1]
-        last_daily_df = self.get_daily_kline_data(last_date)
+        last_date = trade_dates[-1]
+        last_daily_df = get_daily_kline_data(last_date)
         # 核心修正：将positions.keys()转为列表（静态迭代，避免字典大小变化）
         hold_stocks = list(self.account.positions.keys())  # 先转成列表，固定迭代对象
         for ts_code in hold_stocks:

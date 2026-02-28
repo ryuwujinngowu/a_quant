@@ -71,6 +71,15 @@ class SectorHeatStrategy(BaseStrategy):
         sell_signal_map = {}
 
 
+
+
+
+
+
+
+
+
+
         # ========== 步骤2：生成买入信号（严格匹配基类的buy_stocks列表格式） ==========
         buy_stocks = []
         # 防护：模型未加载/无数据时，返回空买入信号
