@@ -3,7 +3,7 @@
 from backtest.engine import MultiStockBacktestEngine
 from config.config import DEFAULT_INIT_CAPITAL
 from strategies.multi_limit_up_strategy import MultiLimitUpStrategy
-from strategies.limit_up_strategy import  LimitUpHoldStrategy
+from strategies.sector_heat_strategy import SectorHeatStrategy
 
 
 def main():
@@ -16,23 +16,22 @@ def main():
     INIT_CAPITAL = DEFAULT_INIT_CAPITAL  # 初始本金10W元
 
     # ===================== 初始化策略与回测引擎 =====================
-    strategy = MultiLimitUpStrategy()
-    engine = MultiStockBacktestEngine(
-        strategy=strategy,
-        init_capital=INIT_CAPITAL,
-        start_date=START_DATE,
-        end_date=END_DATE
-    )
-    # ===================== 初始化策略与回测引擎 =====================
-    # strategy2 = LimitUpHoldStrategy()
-    # engine2 = MultiStockBacktestEngine(
+    # strategy = MultiLimitUpStrategy()
+    # engine = MultiStockBacktestEngine(
     #     strategy=strategy,
     #     init_capital=INIT_CAPITAL,
     #     start_date=START_DATE,
     #     end_date=END_DATE
     # )
 
-    # ===================== 运行回测 =====================
+    strategy = SectorHeatStrategy()
+    engine = MultiStockBacktestEngine(
+        strategy=strategy,
+        init_capital=INIT_CAPITAL,
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
+
     engine.run()
 
 if __name__ == "__main__":

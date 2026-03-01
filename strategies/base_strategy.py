@@ -8,7 +8,11 @@
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple
-
+from config.config import (
+    MAIN_BOARD_LIMIT_UP_RATE,
+    STAR_BOARD_LIMIT_UP_RATE,
+    BJ_BOARD_LIMIT_UP_RATE,
+)
 import pandas as pd
 
 
@@ -57,17 +61,30 @@ class BaseStrategy(ABC):
         """
         pass
 
-    @abstractmethod
     def calc_limit_up_price(self, ts_code: str, pre_close: float) -> float:
         """
-        计算标的价格（引擎买入操作时调用）
-        - 涨停策略：计算涨停价
-        - 均线策略/价值策略：可返回目标买入价（如收盘价、均价等）
-        :param ts_code: 股票代码（如600000.SH）
+        计算股票涨停价（适配不同板块涨跌幅限制）
+        :param ts_code: 股票代码（如600000.SH/300001.SZ/831010.BJ）
         :param pre_close: 前一日收盘价
-        :return: 目标买入价格（float）
+        :return: 涨停价格（保留2位小数，符合A股价格精度）
         """
-        pass
+        # 空值保护：前收盘价无效时返回0，避免计算异常
+        if not pre_close or pre_close <= 0:
+            return 0.0
+
+        # 1. 判断板块类型，匹配对应涨跌幅
+        if ts_code.endswith(".BJ"):  # 北交所
+            limit_rate = BJ_BOARD_LIMIT_UP_RATE
+        elif ts_code.startswith(("300", "301", "302")) or (ts_code.startswith("3") and ts_code.endswith(".SZ")):  # 创业板
+            limit_rate = STAR_BOARD_LIMIT_UP_RATE
+        elif ts_code.startswith("688"):  # 科创板（补充：你配置里有FILTER_688_BOARD，这里一并适配）
+            limit_rate = STAR_BOARD_LIMIT_UP_RATE  # 科创板和创业板涨跌幅一致（20%）
+        else:  # 主板（60/00开头）
+            limit_rate = MAIN_BOARD_LIMIT_UP_RATE
+
+        # 2. 计算涨停价（四舍五入保留2位小数，符合A股价格规则）
+        limit_up_price = pre_close * (1 + limit_rate / 100)
+        return round(limit_up_price, 2)
 
     # ========== 可选扩展方法（子类按需重写） ==========
     def get_strategy_info(self) -> Dict[str, any]:

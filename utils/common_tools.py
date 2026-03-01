@@ -9,8 +9,11 @@ from pathlib import Path
 import functools
 from typing import List, Dict, Optional
 from typing import Tuple
+from config.config import MAIN_BOARD_LIMIT_UP_RATE, STAR_BOARD_LIMIT_UP_RATE, BJ_BOARD_LIMIT_UP_RATE
 from utils.db_utils import db
 from utils.log_utils import logger
+from typing import List, Dict
+
 
 # # Token 统计文件配置（默认统计到 data 目录，可根据需要调整）
 # TOKEN_USAGE_FILE = None
@@ -29,6 +32,158 @@ default_exclude = [
     "汇金持股", "养老金持股", "QFII重仓", "专精特新", 'MSCI中国', '半年报预增', '华为概念', '光伏概念', '储能','一季报预增'
 ]
 
+
+def calc_limit_up_price_common(ts_code: str, pre_close: float) -> float:
+    """
+    通用涨停价计算函数，和策略基类calc_limit_up_price逻辑完全一致
+    保证全项目涨停判断标准统一，无偏差
+    """
+    if not pre_close or pre_close <= 0:
+        return 0.0
+    # 板块判断规则和基类、过滤逻辑完全对齐
+    if ts_code.endswith(".BJ"):
+        limit_rate = BJ_BOARD_LIMIT_UP_RATE
+    elif ts_code.startswith(("300", "301", "302", "688")):
+        limit_rate = STAR_BOARD_LIMIT_UP_RATE
+    else:
+        limit_rate = MAIN_BOARD_LIMIT_UP_RATE
+    # 保留2位小数，符合A股价格精度
+    limit_up_price = pre_close * (1 + limit_rate / 100)
+    return round(limit_up_price, 2)
+
+
+
+def check_stock_has_limit_up(ts_code_list: List[str], end_date: str, day_count: int = 10) -> Dict[str, bool]:
+    """
+    【批量高效无未来函数】判断一批股票在指定日期前的N个交易日内，是否有过涨停
+    :param ts_code_list: 待判断的股票代码列表
+    :param end_date: 当前交易日（兼容YYYYMMDD/YYYY-MM-DD格式）
+    :param day_count: 回溯的交易日数量，默认10个
+    :return: 字典 {ts_code: True=近10天有涨停, False=无涨停（需筛掉）}
+    """
+    # 复用项目已有交易日工具，保证日期规则统一
+    from datetime import datetime, timedelta
+
+    # ========== 核心修复：统一日期格式（兼容带/不带横杠） ==========
+    def normalize_date(date_str: str) -> str:
+        """将任意日期格式转为YYYYMMDD，失败返回空字符串"""
+        if not date_str:
+            return ""
+        # 先清理分隔符（- / . 等）
+        clean_date = date_str.replace("-", "").replace("/", "").replace(".", "")
+        try:
+            # 尝试解析为YYYYMMDD
+            datetime.strptime(clean_date, "%Y%m%d")
+            return clean_date
+        except ValueError:
+            # 尝试解析YYYY-MM-DD再转换
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                return dt.strftime("%Y%m%d")
+            except:
+                logger.error(f"日期格式解析失败：{date_str}，支持格式：YYYYMMDD/YYYY-MM-DD")
+                return ""
+
+    # 1. 标准化end_date为YYYYMMDD格式
+    end_date_norm = normalize_date(end_date)
+    if not end_date_norm:
+        logger.warning("end_date格式无效，返回全False")
+        return {ts_code: False for ts_code in ts_code_list}
+
+    # 入参合法性校验
+    if not ts_code_list or day_count <= 0:
+        logger.warning("check_stock_has_limit_up 入参无效，返回全False")
+        return {ts_code: False for ts_code in ts_code_list}
+
+    try:
+        # 2. 计算回溯日期范围：截止到当前交易日的前一天，彻底避免未来函数
+        end_date_dt = datetime.strptime(end_date_norm, "%Y%m%d")
+        pre_end_date = (end_date_dt - timedelta(days=1)).strftime("%Y%m%d")
+
+        # 获取最近N个有效交易日（自动跳过非交易日、节假日）
+        # 注意：确保get_trade_dates返回的是YYYYMMDD格式
+        trade_dates = get_trade_dates(start_date="20100101", end_date=pre_end_date)
+
+        # 交易日不足的兜底处理
+        if len(trade_dates) < day_count:
+            logger.warning(f"可回溯交易日不足{day_count}个，仅回溯{len(trade_dates)}个")
+            target_dates = trade_dates
+        else:
+            target_dates = trade_dates[-day_count:]  # 取最近N个交易日
+
+        if not target_dates:
+            logger.warning("无有效回溯交易日，返回全False")
+            return {ts_code: False for ts_code in ts_code_list}
+
+        # 3. 批量查询所有候选股的日线数据（一次查询，避免单只循环查库）
+        sql = """
+              SELECT ts_code, trade_date, pre_close, close
+              FROM kline_day
+              WHERE ts_code IN %s
+                AND trade_date IN %s \
+              """
+        result = db.query(sql, (tuple(ts_code_list), tuple(target_dates)))
+        if not result:
+            logger.warning("回溯期内无有效日线数据，返回全False")
+            return {ts_code: False for ts_code in ts_code_list}
+
+        # 4. 分组判断每只股票是否有涨停
+        from collections import defaultdict
+        stock_daily_map = defaultdict(list)
+        for row in result:
+            stock_daily_map[row["ts_code"]].append(row)
+
+        # 初始化结果：默认无涨停（保守风控）
+        result_dict = {ts_code: False for ts_code in ts_code_list}
+        for ts_code, daily_list in stock_daily_map.items():
+            for daily in daily_list:
+                pre_close = daily["pre_close"]
+                close = daily["close"]
+                # 无效价格跳过
+                if pre_close <= 0 or close <= 0:
+                    continue
+                # 计算涨停价，和基类规则完全一致
+                limit_up_price = calc_limit_up_price_common(ts_code, pre_close)
+                if limit_up_price <= 0:
+                    continue
+                # A股涨停判断标准：收盘价≥涨停价
+                if close >= limit_up_price:
+                    result_dict[ts_code] = True
+                    break  # 有1次涨停就终止判断，提升效率
+
+        logger.info(
+            f"近{day_count}个交易日涨停判断完成：有涨停基因个股{sum(result_dict.values())}只，总候选{len(ts_code_list)}只")
+        return result_dict
+
+    except Exception as e:
+        logger.error(f"check_stock_has_limit_up 执行失败：{str(e)}", exc_info=True)
+        # 异常保守处理：全部标记为无涨停，全部筛掉，避免踩雷
+        return {ts_code: False for ts_code in ts_code_list}
+
+
+def is_st_stock(ts_code: str, trade_date: str) -> bool:
+    """
+    校验指定股票在指定交易日是否为ST/*ST风险警示股
+    :param ts_code: 股票代码（如600000.SH）
+    :param trade_date: 交易日期（YYYYMMDD）
+    :return: True=ST风险股（需过滤），False=正常股票
+    """
+    if not ts_code or not trade_date:
+        return True
+    try:
+        sql = """
+            SELECT 1 FROM stock_risk_warning 
+            WHERE ts_code = %s 
+            AND trade_date = %s
+            LIMIT 1
+        """
+        result = db.query(sql, (ts_code, trade_date))
+        # 有记录=ST股，返回True；无记录=正常，返回False
+        return len(result) > 0
+    except Exception as e:
+        logger.warning(f"[is_st_stock] 校验失败 {ts_code} {trade_date}：{str(e)}")
+        # 异常保守处理：默认标记为ST，避免踩雷
+        return True
 
 def get_trade_dates(start_date: str, end_date: str) -> List[str]:
     """
@@ -101,9 +256,9 @@ def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:
     :return: DataFrame（列：ts_code、pct_chg），按pct_chg正序排列；查询失败/无数据返回None
     """
     # ==================== 2. 构建筛选SQL（精准区分板块涨幅阈值） ====================
-    logger.info('*'*60)
-    logger.info('！！！！！！历史数据，非实时数据，仅供模拟训练！！！！！！！')
-    logger.info('*'*60)
+    # logger.info('*'*60)
+    # logger.info('！！！！！！历史数据，非实时数据，仅供模拟训练！！！！！！！')
+    # logger.info('*'*60)
     sql = f"""
         SELECT ts_code, pct_chg
         FROM kline_day
@@ -130,7 +285,7 @@ def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:
     result_df = result_df.rename(columns=str.lower).loc[:, ['ts_code', 'pct_chg']]
     # 再次确认按pct_chg正序排列（防止SQL排序失效）
     result_df = result_df.sort_values(by='pct_chg', ascending=True).reset_index(drop=True)
-    logger.info(f"{trade_date}共查询到{len(result_df)}  只符合条件的股票")
+    logger.debug(f"{trade_date}共查询到{len(result_df)}  只符合条件的股票")
 
     return result_df
 
@@ -165,7 +320,7 @@ def getTagRank_daily(
     # 去重并统计输入股票数量
     ts_code_list = list(set(ts_code_list))
     input_stock_count = len(ts_code_list)
-    logger.info(f"开始统计{input_stock_count}只股票的题材覆盖情况，黑名单题材数：{len(exclude_concepts)}")
+    logger.debug(f"开始统计{input_stock_count}只股票的题材覆盖情况，黑名单题材数：{len(exclude_concepts)}")
 
     # ==================== 2. 极简SQL查询原始数据 ====================
     ts_code_str = "','".join(ts_code_list)
@@ -211,7 +366,7 @@ def getTagRank_daily(
     exploded_df = exploded_df[~exploded_df["concept_name"].isin(exclude_concepts)].reset_index(drop=True)
     after_filter_count = exploded_df["concept_name"].nunique()
 
-    logger.info(
+    logger.debug(
         f"黑名单过滤完成：过滤前题材数 {before_filter_count}，过滤后 {after_filter_count}，共过滤 {before_filter_count - after_filter_count} 个题材")
 
     # ==================== 5. 分组统计 ====================
@@ -232,7 +387,7 @@ def getTagRank_daily(
     ).head(5).reset_index(drop=True)
 
     # ==================== 6. 结果输出 ====================
-    logger.info(f"题材统计完成，前5名题材：\n{result_df.to_string(index=False)}")
+    logger.debug(f"题材统计完成，前5名题材：\n{result_df.to_string(index=False)}")
     return result_df
 
 
@@ -553,8 +708,85 @@ def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
         return wrapper
     return decorator
 
+
+
+def get_stocks_in_sector(sector_name: str) -> List[str]:
+    """
+    【通用工具】从stock_basic表查询指定板块/概念对应的所有股票代码
+    精准匹配逗号分隔的concept_text字段，避免模糊匹配错误
+    :param sector_name: 板块/概念完整名称（如"人工智能"、"算力"）
+    :return: 该板块下的所有股票ts_code列表，查询失败/无结果返回空列表
+    """
+    sector_name_clean = str(sector_name).strip()
+    # 核心SQL：用MySQL原生FIND_IN_SET精准匹配逗号分隔的概念
+    # 加入LOWER兼容大小写不一致的场景，DISTINCT去重避免重复数据
+    sql = """
+        SELECT DISTINCT ts_code 
+        FROM stock_basic 
+        WHERE FIND_IN_SET(%s, concept_tags) > 0
+          """
+    # 执行参数化查询（防SQL注入，完全适配项目db工具的调用方式）
+    result_df = db.query(sql, params=(sector_name_clean,))
+    return result_df
+
+
+
+def get_sector_stock_daily_data(sector_name: str, trade_date: str) -> pd.DataFrame:
+    """
+    【核心工具】查询指定板块在指定交易日的所有股票日线数据
+    完全匹配需求：先查板块对应股票→再查这些股票当日日线
+    :param sector_name: 板块/概念完整名称（如"人工智能"、"算力"）
+    :param trade_date: 交易日，格式严格为YYYYMMDD（如"20260101"，与项目全局格式对齐）
+    :return: 该板块指定交易日的全量日线数据DataFrame，查询失败/无结果返回空DataFrame
+    """
+    # 入参合法性校验
+    if not sector_name or not str(sector_name).strip():
+        logger.warning("[get_sector_stock_daily_data] 板块名称不能为空")
+        return pd.DataFrame()
+
+    trade_date_clean = str(trade_date).strip()
+    if len(trade_date_clean) != 8 or not trade_date_clean.isdigit():
+        logger.warning(f"[get_sector_stock_daily_data] 交易日期格式错误，要求YYYYMMDD，传入：{trade_date}")
+        return pd.DataFrame()
+
+    sector_name_clean = str(sector_name).strip()
+
+    try:
+        # 步骤1：获取板块对应的全量股票代码
+        ts_code_list = get_stocks_in_sector(sector_name_clean)
+        if not ts_code_list:
+            logger.warning(f"[get_sector_stock_daily_data] 板块[{sector_name_clean}]无对应股票，返回空数据")
+            return pd.DataFrame()
+
+        # 步骤2：批量查询这些股票在指定交易日的日线数据
+        # 表名kline_day与项目全局命名对齐，如需修改请调整表名即可
+        sql = """
+              SELECT *
+              FROM kline_day
+              WHERE ts_code IN %s
+                AND trade_date = %s \
+              """
+        # IN查询必须传元组，适配Python MySQL参数化规范
+        result_df = db.query(sql, params=(tuple(ts_code_list), trade_date_clean))
+
+        if result_df.empty:
+            logger.warning(f"[get_sector_stock_daily_data] 板块[{sector_name_clean}]在{trade_date_clean}无有效日线数据")
+            return pd.DataFrame()
+
+        logger.info(
+            f"[get_sector_stock_daily_data] 板块[{sector_name_clean}]在{trade_date_clean}查询到{len(result_df)}条日线数据")
+        return result_df
+
+    except Exception as e:
+        logger.error(
+            f"[get_sector_stock_daily_data] 查询板块日线失败，板块：{sector_name_clean}，日期：{trade_date_clean}，错误：{str(e)}",
+            exc_info=True
+        )
+        return pd.DataFrame()
+
 if __name__ == "__main__":
     # result = select_top3_hot_sectors(trade_date="2024-02-20")
     # print(result)
-    pass
+    print(get_stocks_in_sector('军工'))
+    # pass
 

@@ -442,7 +442,87 @@ class DataFetcher:
             logger.error(f"同花顺热榜数据获取失败，参数：{params}，错误：{str(e)}")
             return pd.DataFrame()
 
+    def fetch_stock_st(
+            self,
+            ts_code: Optional[str] = None,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取ST股票列表（stock_st接口），支持按日期/股票代码查询
+        接口文档：获取ST股票列表，每日9:20更新，20160101起数据
+        限量：单次最大1000行
+        积分：3000积分起
 
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期（YYYYMMDD）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            ST股票列表DataFrame，空数据返回空DataFrame
+        """
+        params = _filter_empty_params({
+            "ts_code": ts_code,
+            "trade_date": trade_date,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+
+        try:
+            st_df = self.pro.stock_st(**params)
+            logger.debug(f"获取stock_st接口数据，参数：{params}，行数：{len(st_df)}")
+
+            if st_df.empty:
+                logger.warning(f"获取stock_st接口数据为空，参数：{params}")
+
+            return st_df
+        except Exception as e:
+            logger.error(f"stock_st接口数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+    def fetch_st_list(
+            self,
+            ts_code: Optional[str] = None,
+            pub_date: Optional[str] = None,
+            imp_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取ST风险警示板股票列表（st接口）
+        接口文档：ST风险警示板股票列表
+        限量：单次最大1000行
+        积分：6000积分起
+
+        Args:
+            ts_code: 股票代码
+            pub_date: 发布日期
+            imp_date: 实施日期
+
+        Returns:
+            ST风险警示股票列表DataFrame，空数据返回空DataFrame
+        """
+        params = _filter_empty_params({
+            "ts_code": ts_code,
+            "pub_date": pub_date,
+            "imp_date": imp_date,
+        })
+
+        try:
+            st_df = self.pro.st(**params)
+            logger.debug(f"获取st接口数据，参数：{params}，行数：{len(st_df)}")
+
+            if st_df.empty:
+                logger.warning(f"获取st接口数据为空，参数：{params}")
+
+            # 修复接口字段笔误 st_tpye → st_type
+            if "st_tpye" in st_df.columns:
+                st_df.rename(columns={"st_tpye": "st_type"}, inplace=True)
+            return st_df
+        except Exception as e:
+            logger.error(f"st接口数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
 
 
 # ===================== 全局实例（保持原命名，不影响调用） =====================

@@ -721,31 +721,59 @@ class DataCleaner:
         return total_ingest_rows
 
 
-    def insert_stock_daily_basic(self,
-            ts_code: str,  # 支持单股票代码/多股票代码列表
-            trade_date: str,
-            start_date: str,  # 开始日期（格式：YYYYMMDD）
-            end_date: Optional[str] = None,  # 结束日期（格式：YYYYMMDD），不传默认到当日
-            table_name: str = "stock_fin_indicator"  # 目标表名
-    ) -> Optional[int]:
-        """入库每日交易详细指标"""
+    # def insert_stock_daily_basic(self,
+    #         ts_code: str,  # 支持单股票代码/多股票代码列表
+    #         trade_date: str,
+    #         start_date: str,  # 开始日期（格式：YYYYMMDD）
+    #         end_date: Optional[str] = None,  # 结束日期（格式：YYYYMMDD），不传默认到当日
+    #         table_name: str = "stock_fin_indicator"  # 目标表名
+    # ) -> Optional[int]:
+    #     """入库每日交易详细指标"""
+    #
+    #     rows = data_fetcher.fetch_stock_daily_basic(ts_code=ts_code,
+    #                  trade_date = trade_date,
+    #                 start_date=start_date,
+    #                 end_date=end_date)
+    #     if rows.empty:
+    #         return 0
+    #     cleaned_df = self._clean_special_fields(rows)
+    #     try:
+    #         affected_rows = db.batch_insert_df(
+    #             df=cleaned_df,
+    #             table_name=table_name,
+    #             ignore_duplicate=True
+    #         )
+    #         return affected_rows
+    #     except Exception as e:
+    #         logger.error(f"每日交易详情入库失败：{str(e)}", exc_info=True)
+    #         return None
 
-        rows = data_fetcher.fetch_stock_daily_basic(ts_code=ts_code,
-                     trade_date = trade_date,
-                    start_date=start_date,
-                    end_date=end_date)
+    def insert_stock_st(
+            self,
+            ts_code: Optional[str] = None,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> Optional[int]:
+        """入库stock_st接口ST股票数据"""
+        rows = data_fetcher.fetch_stock_st(
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date
+        )
         if rows.empty:
             return 0
         cleaned_df = self._clean_special_fields(rows)
         try:
             affected_rows = db.batch_insert_df(
                 df=cleaned_df,
-                table_name=table_name,
+                table_name="stock_risk_warning",
                 ignore_duplicate=True
             )
             return affected_rows
         except Exception as e:
-            logger.error(f"每日交易详情入库失败：{str(e)}", exc_info=True)
+            logger.error(f"stock_st数据入库失败：{str(e)}", exc_info=True)
             return None
 
 
@@ -839,5 +867,30 @@ if __name__ == "__main__":
     # )
     # # 数据预览
     # print(df)
+    # ===================== 测试配置（按需修改） =====================
+    # 测试目标：insert_stock_st 方法
+    # 1. 单日快速测试（推荐，验证接口+入库全流程）
+    TEST_TRADE_DATE = "20260227"  # 请修改为A股有效交易日（格式YYYYMMDD）
 
+    # 2. 日期范围批量测试（可选，注释上面的单日代码，放开下面即可）
+    # TEST_START_DATE = "20260101"
+    # TEST_END_DATE = "20260228"
 
+    # ===================== 执行测试 =====================
+    try:
+        logger.info("===== 开始测试 insert_stock_st 方法 =====")
+        # 执行单日测试
+        data_cleaner = DataCleaner()
+        affected_rows =data_cleaner.insert_stock_st(trade_date=TEST_TRADE_DATE)
+
+        # 执行批量范围测试（切换时注释上面的单日代码，放开这行）
+        # affected_rows = cleaner.insert_stock_st(start_date=TEST_START_DATE, end_date=TEST_END_DATE)
+
+        # 输出测试结果
+        if affected_rows is not None:
+            logger.info(f"===== 测试完成！成功入库 StockRiskWarning 表行数：{affected_rows} =====")
+        else:
+            logger.error("===== 测试失败！方法返回异常，请查看上方错误日志 =====")
+
+    except Exception as e:
+        logger.error(f"===== 测试执行异常：{str(e)} =====", exc_info=True)

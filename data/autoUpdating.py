@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 自动化增量更新脚本
-核心：更新stock_basic全量数据 + 日线增量数据
+核心：更新stock_basic全量数据 + 日线增量数据 + ST风险表每日数据
 """
 import datetime
 import logging
@@ -26,11 +26,61 @@ def update_stock_basic():
     """更新全市场股票基础信息表"""
     logger.info("===== 全量更新stock_basic表 =====")
     try:
-        affected = cleaner.clean_and_insert_stockbase(table_name="stock_basic")
+        cleaner.clean_and_insert_stockbase(table_name="stock_basic")
         return True
     except Exception as e:
         logger.error(f"stock_basic更新失败：{e}", exc_info=True)
         return False
+
+
+# ====================== 【新增】ST股票每日增量更新函数 ======================
+def update_stock_st_incremental(date_list: list):
+    """增量更新ST股票每日数据（按日期列表）- 对齐现有批量更新风格"""
+    if not date_list:
+        return False
+
+    logger.info(f"===== 增量更新ST股票数据（{len(date_list)}天） =====")
+    total_affected = 0
+
+    for trade_date in date_list:
+        # 日期格式转换：适配接口要求的YYYYMMDD格式
+        format_date = trade_date.replace('-', '')
+        offset = 0
+        daily_affected = 0
+
+        # 处理接口单次1000行限制，循环分页拉取全量数据
+        while True:
+            try:
+                # 分页拉取当日ST数据
+                st_df = data_fetcher.fetch_stock_st(
+                    trade_date=format_date,
+                    limit=1000,
+                    offset=offset
+                )
+                if st_df.empty:
+                    break
+
+                # 入库数据，复用cleaner已有的入库方法
+                affected = cleaner.insert_stock_st_daily(
+                    trade_date=format_date,
+                    ts_code=",".join(st_df["ts_code"].tolist())
+                )
+                daily_affected += affected if affected else 0
+
+                # 无下一页时终止循环
+                if len(st_df) < 1000:
+                    break
+                offset += 1000
+
+            except Exception as e:
+                logger.error(f"{trade_date} ST数据更新失败：{e}", exc_info=True)
+                break
+
+        total_affected += daily_affected
+        logger.info(f"{trade_date} ST数据更新完成，入库行数：{daily_affected}")
+
+    logger.info(f"ST股票增量更新完成，累计入库行数：{total_affected}")
+    return True
 
 
 def update_kline_day_incremental(date_list: list):
@@ -102,22 +152,23 @@ def update_kline_day_incremental(date_list: list):
     logger.info(f"日线增量更新完成，累计影响行数：{total_affected}")
     return True
 
+
 def update_index_daily(last_date):
     """更新指数信息表"""
     logger.info("===== 更新index_daily表 =====")
     try:
         for i in '000001.SH','399001.SZ','399006.SZ',"399107.SZ":
-
             cleaner.clean_and_insert_index_daily(
-            ts_code = i,
-            start_date = last_date.replace('-',''),
-            end_date = datetime.datetime.now().strftime("%Y%m%d")
+                ts_code = i,
+                start_date = last_date.replace('-',''),
+                end_date = datetime.datetime.now().strftime("%Y%m%d")
             )
             logger.info(f"已更新{i}指数信息到今日，index_daily表")
         return True
     except Exception as e:
         logger.error(f"更新index_daily表失败：{e}", exc_info=True)
         return False
+
 
 # -------------------------- 主执行流程 --------------------------
 def startUpdating():
@@ -132,11 +183,13 @@ def startUpdating():
     # 2. 计算增量日期
     inc_dates = calc_incremental_date_range(last_date, current_date)
 
-
-    # 3. 执行更新
+    # 3. 执行更新（ST更新紧跟基础信息表，保证选股依赖数据优先更新）
     updated_tables = []
     if update_stock_basic():
         updated_tables.append("stock_basic")
+    # 【新增】ST表增量更新，和增量日期完全对齐
+    if update_stock_st_incremental(inc_dates):
+        updated_tables.append("stock_st_daily")
     if update_kline_day_incremental(inc_dates):
         updated_tables.append("kline_day")
     if update_index_daily(last_date):
@@ -146,7 +199,6 @@ def startUpdating():
     write_update_record(current_date, updated_tables)
     logger.info(f"===== 本次更新时间：{current_date} =====")
     logger.info(f"===== 更新完成 | 本次更新表：{updated_tables} =====")
-
 
 
 if __name__ == "__main__":
