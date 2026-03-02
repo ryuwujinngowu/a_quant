@@ -34,53 +34,22 @@ def update_stock_basic():
 
 
 # ====================== 【新增】ST股票每日增量更新函数 ======================
-def update_stock_st_incremental(date_list: list):
-    """增量更新ST股票每日数据（按日期列表）- 对齐现有批量更新风格"""
-    if not date_list:
+def update_stock_st_incremental(start_date: str, end_date: str):
+    """增量更新ST股票数据（按时间段：start_date到end_date）"""
+    if not start_date or not end_date:
+        logger.warning("ST增量更新：开始/结束日期为空，跳过更新")
         return False
 
-    logger.info(f"===== 增量更新ST股票数据（{len(date_list)}天） =====")
-    total_affected = 0
-
-    for trade_date in date_list:
-        # 日期格式转换：适配接口要求的YYYYMMDD格式
-        format_date = trade_date.replace('-', '')
-        offset = 0
-        daily_affected = 0
-
-        # 处理接口单次1000行限制，循环分页拉取全量数据
-        while True:
-            try:
-                # 分页拉取当日ST数据
-                st_df = data_fetcher.fetch_stock_st(
-                    trade_date=format_date,
-                    limit=1000,
-                    offset=offset
-                )
-                if st_df.empty:
-                    break
-
-                # 入库数据，复用cleaner已有的入库方法
-                affected = cleaner.insert_stock_st_daily(
-                    trade_date=format_date,
-                    ts_code=",".join(st_df["ts_code"].tolist())
-                )
-                daily_affected += affected if affected else 0
-
-                # 无下一页时终止循环
-                if len(st_df) < 1000:
-                    break
-                offset += 1000
-
-            except Exception as e:
-                logger.error(f"{trade_date} ST数据更新失败：{e}", exc_info=True)
-                break
-
-        total_affected += daily_affected
-        logger.info(f"{trade_date} ST数据更新完成，入库行数：{daily_affected}")
-
-    logger.info(f"ST股票增量更新完成，累计入库行数：{total_affected}")
-    return True
+    logger.info(f"===== 增量更新ST股票数据（时间段：{start_date} ~ {end_date}） =====")
+    try:
+        # 直接传时间段批量更新，无需循环单个日期
+        affected_rows = cleaner.insert_stock_st(start_date=start_date, end_date=end_date)
+        total_affected = affected_rows if affected_rows is not None else 0
+        logger.info(f"ST股票增量更新完成，累计入库行数：{total_affected}")
+        return True
+    except Exception as e:
+        logger.error(f"ST数据更新失败（{start_date}~{end_date}）：{e}", exc_info=True)
+        return False
 
 
 def update_kline_day_incremental(date_list: list):
@@ -187,8 +156,7 @@ def startUpdating():
     updated_tables = []
     if update_stock_basic():
         updated_tables.append("stock_basic")
-    # 【新增】ST表增量更新，和增量日期完全对齐
-    if update_stock_st_incremental(inc_dates):
+    if update_stock_st_incremental(last_date, current_date):
         updated_tables.append("stock_st_daily")
     if update_kline_day_incremental(inc_dates):
         updated_tables.append("kline_day")

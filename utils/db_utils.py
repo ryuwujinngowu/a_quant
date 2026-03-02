@@ -94,12 +94,9 @@ class DBConnector:
             cursor.execute(sql, params or ())
             logger.debug(f"查询sql: {(sql)} ，参数{params}")
             result = cursor.fetchall()
-
             if return_df:
                 return pd.DataFrame.from_records(result)
-
             return result
-
         except Exception as e:
             logger.error(f"查询失败: {e}")
             return None

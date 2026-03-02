@@ -477,7 +477,6 @@ class DataFetcher:
 
             if st_df.empty:
                 logger.warning(f"获取stock_st接口数据为空，参数：{params}")
-
             return st_df
         except Exception as e:
             logger.error(f"stock_st接口数据获取失败，参数：{params}，错误：{str(e)}")

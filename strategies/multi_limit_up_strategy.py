@@ -61,22 +61,22 @@ class MultiLimitUpStrategy(BaseStrategy):
         # 主板（沪市60/深市00）：10%涨停
         return MAIN_BOARD_LIMIT_UP_RATE
 
-    def calc_limit_up_price(self, ts_code, pre_close):
-        """
-        计算涨停价（含数据校验，确保结果符合业务逻辑）
-        :param ts_code: 股票代码
-        :param pre_close: 前收盘价（元）
-        :return: 涨停价（保留2位小数，无效值返回0）
-        """
-        # 问题5：数据校验，避免前收盘价≤0导致计算错误
-        if pre_close <= 0:
-            logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0")
-            return 0
-        # 涨停价公式：前收盘价 × (1 + 涨停幅度)，四舍五入保留2位小数（符合A股价格精度）
-        limit_up_price = round(pre_close * (1 + self.get_limit_up_rate_by_ts_code(ts_code)), 2)
-        logger.debug(
-            f"[{ts_code}] 前收盘价={pre_close}，涨停幅度={self.get_limit_up_rate_by_ts_code(ts_code)}，涨停价={limit_up_price}")
-        return limit_up_price
+    # def calc_limit_up_price(self, ts_code, pre_close):
+    #     """
+    #     计算涨停价（含数据校验，确保结果符合业务逻辑）
+    #     :param ts_code: 股票代码
+    #     :param pre_close: 前收盘价（元）
+    #     :return: 涨停价（保留2位小数，无效值返回0）
+    #     """
+    #     # 问题5：数据校验，避免前收盘价≤0导致计算错误
+    #     if pre_close <= 0:
+    #         logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0")
+    #         return 0
+    #     # 涨停价公式：前收盘价 × (1 + 涨停幅度)，四舍五入保留2位小数（符合A股价格精度）
+    #     limit_up_price = round(pre_close * (1 + self.get_limit_up_rate_by_ts_code(ts_code)), 2)
+    #     logger.debug(
+    #         f"[{ts_code}] 前收盘价={pre_close}，涨停幅度={self.get_limit_up_rate_by_ts_code(ts_code)}，涨停价={limit_up_price}")
+    #     return limit_up_price
 
     def _filter_stock_by_type(self, ts_code: str) -> bool:
         """

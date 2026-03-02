@@ -35,7 +35,7 @@ class DataCleaner:
         df_cleaned.rename(columns=reserved_field_mapping, inplace=True)
 
         # 日期字段格式统一（YYYYMMDD → YYYY-MM-DD）
-        date_fields = ["list_date", "delist_date", "end_date", "start_date"]
+        date_fields = ["list_date", "delist_date", "end_date", "start_date", "trade_date"]
         for field in date_fields:
             if field in df_cleaned.columns:
                 df_cleaned[field] = pd.to_datetime(
@@ -755,7 +755,9 @@ class DataCleaner:
             start_date: Optional[str] = None,
             end_date: Optional[str] = None
     ) -> Optional[int]:
-        """入库stock_st接口ST股票数据"""
+        """入库stock_st接口ST股票数据（确保trade_date为YYYY-MM-DD格式）"""
+        logger.info(
+            f"===== 开始入库ST数据 | ts_code={ts_code} | 日期范围={trade_date or f'{start_date}-{end_date}'} =====")
         rows = data_fetcher.fetch_stock_st(
             ts_code=ts_code,
             trade_date=trade_date,
@@ -763,17 +765,30 @@ class DataCleaner:
             end_date=end_date
         )
         if rows.empty:
+            logger.warning("ST原始数据为空，跳过入库")
             return 0
+
+        # 复用通用清洗方法，自动转换trade_date为YYYY-MM-DD
         cleaned_df = self._clean_special_fields(rows)
+        if cleaned_df.empty:
+            logger.warning("ST数据清洗后为空，跳过入库")
+            return 0
+
+        # 打印日期格式验证日志（调试用，上线可保留）
+        if "trade_date" in cleaned_df.columns:
+            sample_dates = cleaned_df["trade_date"].head(3).tolist()
+            logger.debug(f"ST数据trade_date格式验证（前3条）：{sample_dates}")
+
         try:
             affected_rows = db.batch_insert_df(
                 df=cleaned_df,
                 table_name="stock_risk_warning",
                 ignore_duplicate=True
             )
+            logger.info(f"✅ ST数据入库完成 | 目标表：stock_risk_warning | 影响行数：{affected_rows}")
             return affected_rows
         except Exception as e:
-            logger.error(f"stock_st数据入库失败：{str(e)}", exc_info=True)
+            logger.error(f"❌ stock_st数据入库失败：{str(e)}", exc_info=True)
             return None
 
 
@@ -867,24 +882,19 @@ if __name__ == "__main__":
     # )
     # # 数据预览
     # print(df)
+
+
     # ===================== 测试配置（按需修改） =====================
-    # 测试目标：insert_stock_st 方法
-    # 1. 单日快速测试（推荐，验证接口+入库全流程）
-    TEST_TRADE_DATE = "20260227"  # 请修改为A股有效交易日（格式YYYYMMDD）
-
-    # 2. 日期范围批量测试（可选，注释上面的单日代码，放开下面即可）
-    # TEST_START_DATE = "20260101"
-    # TEST_END_DATE = "20260228"
-
-    # ===================== 执行测试 =====================
+    # TEST_START_DATE = "20160101"
+    # TEST_END_DATE = "20260226"
     try:
         logger.info("===== 开始测试 insert_stock_st 方法 =====")
         # 执行单日测试
         data_cleaner = DataCleaner()
-        affected_rows =data_cleaner.insert_stock_st(trade_date=TEST_TRADE_DATE)
+        affected_rows =data_cleaner.insert_stock_st(trade_date='20260105')
 
         # 执行批量范围测试（切换时注释上面的单日代码，放开这行）
-        # affected_rows = cleaner.insert_stock_st(start_date=TEST_START_DATE, end_date=TEST_END_DATE)
+        # affected_rows =data_cleaner.insert_stock_st(start_date=TEST_START_DATE, end_date=TEST_END_DATE)
 
         # 输出测试结果
         if affected_rows is not None:

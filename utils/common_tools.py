@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+from collections import defaultdict
 from datetime import datetime, timedelta
 import pandas as pd
 import time
@@ -33,157 +34,155 @@ default_exclude = [
 ]
 
 
-def calc_limit_up_price_common(ts_code: str, pre_close: float) -> float:
+# def calc_limit_up_price_common(ts_code: str, pre_close: float) -> float:
+#     """
+#     通用涨停价计算函数，和策略基类calc_limit_up_price逻辑完全一致
+#     保证全项目涨停判断标准统一，无偏差
+#     """
+#     if not pre_close or pre_close <= 0:
+#         return 0.0
+#     # 板块判断规则和基类、过滤逻辑完全对齐
+#     if ts_code.endswith(".BJ"):
+#         limit_rate = BJ_BOARD_LIMIT_UP_RATE
+#     elif ts_code.startswith(("300", "301", "302", "688")):
+#         limit_rate = STAR_BOARD_LIMIT_UP_RATE
+#     else:
+#         limit_rate = MAIN_BOARD_LIMIT_UP_RATE
+#     # 保留2位小数，符合A股价格精度
+#     limit_up_price = pre_close * (1 + limit_rate / 100)
+#     return round(limit_up_price, 2)
+
+# def check_stock_has_limit_up(ts_code_list: List[str], end_date: str, day_count: int = 10) -> Dict[str, bool]:
+#     """
+#     【修复后】批量判断股票近N个交易日是否有涨停（无未来函数+日期格式正确+性能优化）
+#     :param ts_code_list: 待判断股票代码列表
+#     :param end_date: 当前交易日（兼容YYYYMMDD/YYYY-MM-DD）
+#     :param day_count: 回溯交易日数，默认10
+#     :return: {ts_code: True=近10日有涨停, False=无涨停}
+#     """
+#     # 1. 入参校验
+#     if not ts_code_list or day_count <= 0 or not end_date:
+#         logger.warning("check_stock_has_limit_up 入参无效，返回全True（保守保留所有股票）")
+#         return {ts_code: True for ts_code in ts_code_list}
+#
+#     # 2. 统一日期格式：最终转为YYYY-MM-DD，和kline_day表完全对齐
+#     try:
+#         if len(end_date) == 8 and end_date.isdigit():
+#             end_date_dt = datetime.strptime(end_date, "%Y%m%d")
+#             end_date_format = end_date_dt.strftime("%Y-%m-%d")
+#         else:
+#             end_date_dt = datetime.strptime(end_date, "%Y-%m-%d")
+#             end_date_format = end_date
+#     except ValueError as e:
+#         logger.error(f"日期格式解析失败：{end_date}，错误：{e}，返回全True")
+#         return {ts_code: True for ts_code in ts_code_list}
+#
+#     try:
+#         # 截止到当前交易日的前一天，彻底避免未来函数
+#         pre_end_date = (end_date_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+#         # 直接查询最近N个交易日，无需全量查询
+#         sql_trade_date = """
+#                          SELECT cal_date \
+#                          FROM trade_cal
+#                          WHERE cal_date <= %s \
+#                            AND is_open = 1
+#                          ORDER BY cal_date DESC
+#                              LIMIT %s \
+#                          """
+#         trade_date_result = db.query(sql_trade_date, (pre_end_date, day_count))
+#         if not trade_date_result or len(trade_date_result) < day_count:
+#             logger.warning(f"可回溯交易日不足{day_count}个，返回全True")
+#             return {ts_code: True for ts_code in ts_code_list}
+#
+#         # 提取交易日列表，格式和kline_day表一致（YYYY-MM-DD）
+#         target_dates = [row["cal_date"].strftime("%Y-%m-%d") for row in trade_date_result]
+#         logger.debug(f"近{day_count}个回溯交易日：{target_dates}")
+#
+#     except Exception as e:
+#         logger.error(f"获取交易日历失败：{e}，返回全True")
+#         return {ts_code: True for ts_code in ts_code_list}
+#
+#     # 4. 批量查询回溯期内所有候选股的日线数据
+#     try:
+#         sql = """
+#               SELECT ts_code, trade_date, pre_close, close
+#               FROM kline_day
+#               WHERE ts_code IN %s \
+#                 AND trade_date IN %s \
+#               """
+#         result = db.query(sql, (tuple(ts_code_list), tuple(target_dates)))
+#         if not result:
+#             logger.warning("回溯期内无有效日线数据，返回全True")
+#             return {ts_code: True for ts_code in ts_code_list}
+#
+#     except Exception as e:
+#         logger.error(f"查询日线数据失败：{e}，返回全True")
+#         return {ts_code: True for ts_code in ts_code_list}
+#
+#     # 5. 分组判断每只股票是否有涨停
+#     stock_daily_map = defaultdict(list)
+#     for row in result:
+#         stock_daily_map[row["ts_code"]].append(row)
+#
+#     # 初始化结果：默认无涨停
+#     result_dict = {ts_code: False for ts_code in ts_code_list}
+#     for ts_code, daily_list in stock_daily_map.items():
+#         for daily in daily_list:
+#             pre_close = daily["pre_close"]
+#             close = daily["close"]
+#
+#             if pre_close <= 0 or close <= 0:
+#                 continue
+#             # 用全局统一的涨停价计算函数
+#             limit_up_price = calc_limit_up_price_common(ts_code, pre_close)
+#             logger.debug(
+#                 f"【涨停判断明细】{ts_code} 日期：{daily['trade_date']} | 前收：{pre_close} | 收盘价：{close} | 涨停价：{limit_up_price} | 是否满足：{close >= limit_up_price - 0.01}")
+#             # =================================================
+#             if limit_up_price <= 0:
+#                 continue
+#             # 涨停判断标准：收盘价≥涨停价-0.01（兼容价格精度）
+#             if close >= limit_up_price - 0.01:
+#                 result_dict[ts_code] = True
+#                 break  # 有1次涨停就终止
+#
+#     logger.info(f"近{day_count}日涨停判断完成：有涨停基因个股{sum(result_dict.values())}只，总候选{len(ts_code_list)}只")
+#     return result_dict
+#
+
+
+
+def filter_st_stocks(ts_code_list: List[str], trade_date: str) -> List[str]:
     """
-    通用涨停价计算函数，和策略基类calc_limit_up_price逻辑完全一致
-    保证全项目涨停判断标准统一，无偏差
+    【唯一ST过滤方法】批量过滤指定交易日的ST/*ST股票（先动态入库当日ST数据，再1次查询比对）
+    :param ts_code_list: 待过滤的股票代码列表（如['000001.SZ', '600000.SH']）
+    :param trade_date: 交易日（兼容YYYYMMDD/YYYY-MM-DD格式）
+    :return: 过滤后的正常股票代码列表（已剔除所有ST股）
     """
-    if not pre_close or pre_close <= 0:
-        return 0.0
-    # 板块判断规则和基类、过滤逻辑完全对齐
-    if ts_code.endswith(".BJ"):
-        limit_rate = BJ_BOARD_LIMIT_UP_RATE
-    elif ts_code.startswith(("300", "301", "302", "688")):
-        limit_rate = STAR_BOARD_LIMIT_UP_RATE
-    else:
-        limit_rate = MAIN_BOARD_LIMIT_UP_RATE
-    # 保留2位小数，符合A股价格精度
-    limit_up_price = pre_close * (1 + limit_rate / 100)
-    return round(limit_up_price, 2)
-
-
-
-def check_stock_has_limit_up(ts_code_list: List[str], end_date: str, day_count: int = 10) -> Dict[str, bool]:
-    """
-    【批量高效无未来函数】判断一批股票在指定日期前的N个交易日内，是否有过涨停
-    :param ts_code_list: 待判断的股票代码列表
-    :param end_date: 当前交易日（兼容YYYYMMDD/YYYY-MM-DD格式）
-    :param day_count: 回溯的交易日数量，默认10个
-    :return: 字典 {ts_code: True=近10天有涨停, False=无涨停（需筛掉）}
-    """
-    # 复用项目已有交易日工具，保证日期规则统一
-    from datetime import datetime, timedelta
-
-    # ========== 核心修复：统一日期格式（兼容带/不带横杠） ==========
-    def normalize_date(date_str: str) -> str:
-        """将任意日期格式转为YYYYMMDD，失败返回空字符串"""
-        if not date_str:
-            return ""
-        # 先清理分隔符（- / . 等）
-        clean_date = date_str.replace("-", "").replace("/", "").replace(".", "")
-        try:
-            # 尝试解析为YYYYMMDD
-            datetime.strptime(clean_date, "%Y%m%d")
-            return clean_date
-        except ValueError:
-            # 尝试解析YYYY-MM-DD再转换
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-                return dt.strftime("%Y%m%d")
-            except:
-                logger.error(f"日期格式解析失败：{date_str}，支持格式：YYYYMMDD/YYYY-MM-DD")
-                return ""
-
-    # 1. 标准化end_date为YYYYMMDD格式
-    end_date_norm = normalize_date(end_date)
-    if not end_date_norm:
-        logger.warning("end_date格式无效，返回全False")
-        return {ts_code: False for ts_code in ts_code_list}
-
-    # 入参合法性校验
-    if not ts_code_list or day_count <= 0:
-        logger.warning("check_stock_has_limit_up 入参无效，返回全False")
-        return {ts_code: False for ts_code in ts_code_list}
-
+    # 3. 1次数据库查询：获取当日最新ST股票代码（入库后查询，确保数据最新）
     try:
-        # 2. 计算回溯日期范围：截止到当前交易日的前一天，彻底避免未来函数
-        end_date_dt = datetime.strptime(end_date_norm, "%Y%m%d")
-        pre_end_date = (end_date_dt - timedelta(days=1)).strftime("%Y%m%d")
-
-        # 获取最近N个有效交易日（自动跳过非交易日、节假日）
-        # 注意：确保get_trade_dates返回的是YYYYMMDD格式
-        trade_dates = get_trade_dates(start_date="20100101", end_date=pre_end_date)
-
-        # 交易日不足的兜底处理
-        if len(trade_dates) < day_count:
-            logger.warning(f"可回溯交易日不足{day_count}个，仅回溯{len(trade_dates)}个")
-            target_dates = trade_dates
-        else:
-            target_dates = trade_dates[-day_count:]  # 取最近N个交易日
-
-        if not target_dates:
-            logger.warning("无有效回溯交易日，返回全False")
-            return {ts_code: False for ts_code in ts_code_list}
-
-        # 3. 批量查询所有候选股的日线数据（一次查询，避免单只循环查库）
         sql = """
-              SELECT ts_code, trade_date, pre_close, close
-              FROM kline_day
-              WHERE ts_code IN %s
-                AND trade_date IN %s \
+              SELECT DISTINCT ts_code
+              FROM stock_risk_warning
+              WHERE trade_date = %s \
               """
-        result = db.query(sql, (tuple(ts_code_list), tuple(target_dates)))
-        if not result:
-            logger.warning("回溯期内无有效日线数据，返回全False")
-            return {ts_code: False for ts_code in ts_code_list}
-
-        # 4. 分组判断每只股票是否有涨停
-        from collections import defaultdict
-        stock_daily_map = defaultdict(list)
-        for row in result:
-            stock_daily_map[row["ts_code"]].append(row)
-
-        # 初始化结果：默认无涨停（保守风控）
-        result_dict = {ts_code: False for ts_code in ts_code_list}
-        for ts_code, daily_list in stock_daily_map.items():
-            for daily in daily_list:
-                pre_close = daily["pre_close"]
-                close = daily["close"]
-                # 无效价格跳过
-                if pre_close <= 0 or close <= 0:
-                    continue
-                # 计算涨停价，和基类规则完全一致
-                limit_up_price = calc_limit_up_price_common(ts_code, pre_close)
-                if limit_up_price <= 0:
-                    continue
-                # A股涨停判断标准：收盘价≥涨停价
-                if close >= limit_up_price:
-                    result_dict[ts_code] = True
-                    break  # 有1次涨停就终止判断，提升效率
-
+        st_result = db.query(sql, trade_date)
+        st_code_set = set([row["ts_code"] for row in st_result]) if st_result else set()
+        # 4. 批量比对：保留非ST股票
+        normal_codes = [ts_code for ts_code in ts_code_list if ts_code not in st_code_set]
+        # 5. 关键日志：明确过滤效果
+        filter_count = len(ts_code_list) - len(normal_codes)
         logger.info(
-            f"近{day_count}个交易日涨停判断完成：有涨停基因个股{sum(result_dict.values())}只，总候选{len(ts_code_list)}只")
-        return result_dict
-
+            f"[filter_st_stocks] 交易日{trade_date} ST过滤完成 | "
+            f"原始股票数：{len(ts_code_list)} | 剔除ST股数：{filter_count} | 剩余正常股票数：{len(normal_codes)}"
+        )
+        # 调试日志：打印被剔除的ST股（可选）
+        if filter_count > 0:
+            st_removed = [ts_code for ts_code in ts_code_list if ts_code in st_code_set]
+            logger.debug(f"[filter_st_stocks] 当日被剔除的ST股：{st_removed}")
+        return normal_codes
     except Exception as e:
-        logger.error(f"check_stock_has_limit_up 执行失败：{str(e)}", exc_info=True)
-        # 异常保守处理：全部标记为无涨停，全部筛掉，避免踩雷
-        return {ts_code: False for ts_code in ts_code_list}
-
-
-def is_st_stock(ts_code: str, trade_date: str) -> bool:
-    """
-    校验指定股票在指定交易日是否为ST/*ST风险警示股
-    :param ts_code: 股票代码（如600000.SH）
-    :param trade_date: 交易日期（YYYYMMDD）
-    :return: True=ST风险股（需过滤），False=正常股票
-    """
-    if not ts_code or not trade_date:
-        return True
-    try:
-        sql = """
-            SELECT 1 FROM stock_risk_warning 
-            WHERE ts_code = %s 
-            AND trade_date = %s
-            LIMIT 1
-        """
-        result = db.query(sql, (ts_code, trade_date))
-        # 有记录=ST股，返回True；无记录=正常，返回False
-        return len(result) > 0
-    except Exception as e:
-        logger.warning(f"[is_st_stock] 校验失败 {ts_code} {trade_date}：{str(e)}")
-        # 异常保守处理：默认标记为ST，避免踩雷
-        return True
+        logger.error(f"[filter_st_stocks] 批量过滤ST股票失败 | 交易日：{trade_date} | 错误：{e}", exc_info=True)
+        return []
 
 def get_trade_dates(start_date: str, end_date: str) -> List[str]:
     """
