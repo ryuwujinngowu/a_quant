@@ -26,7 +26,7 @@ UPDATE_RECORD_FILE = Path(__file__).parent.parent / "data" / "update_record.json
 
 
 default_exclude = [
-    "融资融券", "转融券标的", "标普道琼斯A股", '核准制次新股', '腾讯概念', '阿里巴巴概念', '抖音概念','ST板块','军工',
+    "融资融券", "转融券标的", "标普道琼斯A股", '核准制次新股', '腾讯概念', '阿里巴巴概念', '抖音概念','ST板块',
     "MSCI概念", "深股通", "沪股通", '一带一路', '新股与次新股', '节能环保','稀缺资源','电子商务','俄乌冲突概念',
     "同花顺漂亮100", "富时罗素概念", "富时罗素概念股", '比亚迪概念', '5G', '小金属概念','参股银行','锂电池','spacex',
     "央企国资改革", "地方国资改革", "证金持股", '新能源汽车', '次新股', '宁德时代概念','人民币贬值受益','中俄贸易概念',
@@ -221,23 +221,62 @@ def get_trade_dates(start_date: str, end_date: str) -> List[str]:
     logger.debug(f"交易日查询成功：[{start_date} 至 {end_date}] 共{len(trade_dates)}个有效交易日")
     return trade_dates
 
-def get_daily_kline_data(trade_date: str) -> pd.DataFrame:
-        """获取指定日期全市场日线数据（仅交易日执行，杜绝无效请求）"""
-        logger.debug(f"开始获取日线数据: {trade_date}")
-        trade_date_format = trade_date.replace("-", "")
-        # 优先从数据库读取
+
+def get_daily_kline_data(trade_date: str, ts_code_list: List[str] = None) -> pd.DataFrame:
+    """
+    获取指定日期的日线数据（向后兼容优化版）
+    【新增功能】支持仅查询指定股票的日线数据，大幅提升性能
+    【向后兼容】不传ts_code_list时，保持原有全市场查询逻辑，不影响现有调用
+
+    :param trade_date: 交易日（兼容YYYY-MM-DD/YYYYMMDD格式）
+    :param ts_code_list: 【可选】指定股票代码列表，仅查询这些股票的日线数据
+    :return: 日线数据DataFrame
+    """
+    # 1. 日期格式化（兼容两种格式）
+    logger.debug(
+        f"开始获取日线数据: {trade_date}" + (f"，指定股票数：{len(ts_code_list)}" if ts_code_list else "，全市场"))
+    trade_date_format = trade_date.replace("-", "")
+
+    # 2. 构建SQL和参数（根据是否指定股票动态调整）
+    if ts_code_list:
+        # 【新增】仅查询指定股票
+        if not isinstance(ts_code_list, (list, tuple, set)):
+            logger.error(f"ts_code_list格式错误，必须是列表/元组/集合，当前类型：{type(ts_code_list)}")
+            return pd.DataFrame()
+        if not ts_code_list:
+            logger.warning("ts_code_list为空，返回空DataFrame")
+            return pd.DataFrame()
+
+        # 构建带IN条件的SQL
         sql = """
               SELECT ts_code, trade_date, open, high, low, close, pre_close, volume, amount
               FROM kline_day
-              WHERE trade_date = %s \
+              WHERE trade_date = %s 
+                AND ts_code IN %s
               """
-        df = db.query(sql, params=(trade_date_format,), return_df=True)
-        if df is not None and not df.empty:
-            logger.debug(f"{trade_date} 日线数据从数据库读取完成，行数：{len(df)}")
-            return df
-        else:
-            logger.error(f"{trade_date} 日线数据拉取失败，跳过当日")
-            return pd.DataFrame()
+        params = (trade_date_format, tuple(ts_code_list))
+    else:
+        # 【原有逻辑】查询全市场（保持向后兼容）
+        sql = """
+              SELECT ts_code, trade_date, open, high, low, close, pre_close, volume, amount
+              FROM kline_day
+              WHERE trade_date = %s 
+              """
+        params = (trade_date_format,)
+
+    # 3. 执行查询（保持原有逻辑不变）
+    try:
+        df = db.query(sql, params=params, return_df=True)
+    except Exception as e:
+        logger.error(f"{trade_date} 日线数据查询失败：{str(e)}")
+        return pd.DataFrame()
+    # 4. 返回结果（保持原有逻辑不变）
+    if df is not None and not df.empty:
+        logger.debug(f"{trade_date} 日线数据从数据库读取完成，行数：{len(df)}")
+        return df
+    else:
+        logger.error(f"{trade_date} 日线数据拉取失败，跳过当日")
+        return pd.DataFrame()
 
 
 def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:

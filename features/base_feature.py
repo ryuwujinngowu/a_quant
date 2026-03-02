@@ -25,7 +25,7 @@ class BaseFeature(ABC):
     # 不实现的话，代码运行时直接报错，避免你漏写核心逻辑
     # 入参df：必须是包含股票数据的DataFrame；返回值也必须是DataFrame
     @abstractmethod
-    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate(self, df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
         pass  # 空方法，留给子类写具体的特征计算逻辑（比如算涨停数、均线）
 
     # run方法：所有特征的"统一执行入口"

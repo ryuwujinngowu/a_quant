@@ -61,22 +61,7 @@ class MultiLimitUpStrategy(BaseStrategy):
         # 主板（沪市60/深市00）：10%涨停
         return MAIN_BOARD_LIMIT_UP_RATE
 
-    # def calc_limit_up_price(self, ts_code, pre_close):
-    #     """
-    #     计算涨停价（含数据校验，确保结果符合业务逻辑）
-    #     :param ts_code: 股票代码
-    #     :param pre_close: 前收盘价（元）
-    #     :return: 涨停价（保留2位小数，无效值返回0）
-    #     """
-    #     # 问题5：数据校验，避免前收盘价≤0导致计算错误
-    #     if pre_close <= 0:
-    #         logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0")
-    #         return 0
-    #     # 涨停价公式：前收盘价 × (1 + 涨停幅度)，四舍五入保留2位小数（符合A股价格精度）
-    #     limit_up_price = round(pre_close * (1 + self.get_limit_up_rate_by_ts_code(ts_code)), 2)
-    #     logger.debug(
-    #         f"[{ts_code}] 前收盘价={pre_close}，涨停幅度={self.get_limit_up_rate_by_ts_code(ts_code)}，涨停价={limit_up_price}")
-    #     return limit_up_price
+
 
     def _filter_stock_by_type(self, ts_code: str) -> bool:
         """
@@ -142,52 +127,6 @@ class MultiLimitUpStrategy(BaseStrategy):
         logger.debug(f"首次触板时间={first_hit_time}")
         return first_hit_time
 
-    # # ========= 一字板回封判断（核心选股逻辑） =========
-    # def check_reopen(self, min_df, limit_price, daily_row):
-    #     """
-    #     问题3：重构一字板判断逻辑（改用日K开盘价，而非9:25分数据）
-    #     :param min_df: 分钟线DF
-    #     :param limit_price: 涨停价（元）
-    #     :param daily_row: 该股票当日日线数据（Series）
-    #     :return: 回封时间（datetime/None）
-    #     """
-    #     # 数据校验：缺失核心字段直接返回None
-    #     if "trade_time" not in min_df.columns:
-    #         logger.debug("分钟线缺失trade_time字段，跳过一字板回封判断")
-    #         return None
-    #
-    #     # 统一trade_time为datetime类型
-    #     if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
-    #         min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
-    #
-    #     # 问题3修复：用日K开盘价判断一字板（open≥涨停价×容忍度）
-    #     open_price = daily_row["open"]
-    #     is_limit_open = open_price >= limit_price * self.limit_up_price_tolerance
-    #     if not is_limit_open:
-    #         logger.debug(
-    #             f"日K开盘价={open_price} < 涨停价×容忍度={limit_price * self.limit_up_price_tolerance}，非一字板")
-    #         return None
-    #
-    #     # 一字板前提下，判断开板回封
-    #     df = min_df.sort_values("trade_time").reset_index(drop=True)
-    #     for i, row in df.iterrows():
-    #         # 开板判定：分钟最低价 < 涨停价×容忍度
-    #         if row.low < limit_price * self.limit_up_price_tolerance:
-    #             logger.debug(f"[{row.trade_time}] 一字板开板，最低价={row.low}")
-    #             # 情况1：本分钟回封（收盘价≥涨停价×容忍度）
-    #             if row.close >= limit_price * self.limit_up_price_tolerance:
-    #                 logger.debug(f"[{row.trade_time}] 本分钟回封，返回该时间")
-    #                 return row.trade_time
-    #             # 情况2：下一分钟回封（跨分钟回封）
-    #             if i + 1 < len(df):
-    #                 next_row = df.iloc[i + 1]
-    #                 if next_row.close >= limit_price * self.limit_up_price_tolerance:
-    #                     logger.debug(f"[{next_row.trade_time}] 下一分钟回封，返回该时间")
-    #                     return next_row.trade_time
-    #
-    #     # 一字板开板后未回封
-    #     logger.debug("一字板开板后未回封，返回None")
-    #     return None
 
     # ========= 核心选股逻辑（生成买入列表） =========
     def select_buy_stocks(self, trade_date, daily_df, available_pos):
@@ -357,25 +296,6 @@ class MultiLimitUpStrategy(BaseStrategy):
         logger.debug(f"{ts},一字板开板后未回封，返回None")
         return None
 
-    # ========== 保留get_first_limit_time方法（非一字板首板逻辑） ==========
-    def get_first_limit_time(self, min_df, limit_price):
-        """
-        非一字板：获取首次触板时间（分钟线high≥涨停价×容忍度）
-        :param min_df: 分钟线DF
-        :param limit_price: 涨停价
-        :return: 首次触板时间（datetime/None）
-        """
-        if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
-            min_df["trade_time"] = pd.to_datetime(min_df["trade_time"])
-
-        threshold = limit_price * self.limit_up_price_tolerance
-        hit = min_df[min_df.high >= threshold]
-
-        if hit.empty:
-            return None
-
-        first_hit_time = hit.sort_values("trade_time").trade_time.iloc[0]
-        return first_hit_time
 
     def _unify_date_format(self, date_str: str) -> str:
         """统一日期格式为YYYYMMDD（和Account/Position类保持一致）"""
@@ -409,8 +329,6 @@ class MultiLimitUpStrategy(BaseStrategy):
             # 计算涨停价，判断是否涨停
             limit_price = self.calc_limit_up_price(ts_code, row["pre_close"])
             is_limit = row["close"] >= limit_price * self.limit_up_price_tolerance
-
-            # 问题10：hold_days业务逻辑+回测引擎信号接收说明
             """
             hold_days业务逻辑（确保回测引擎正确接收信号）：
             1. hold_days=0：当日买入的股票（持仓天数0）
@@ -419,14 +337,6 @@ class MultiLimitUpStrategy(BaseStrategy):
                - 未涨停 → 生成"close"信号 → 回测引擎当日收盘执行卖出
             信号传递：sell_signal_map会被回测引擎保存，次日处理"open"信号，当日处理"close"信号
             """
-            # if pos.hold_days == 0 and not is_limit:
-            #     sell_signal_map[ts_code] = self.SELL_TYPE_AFTER_BLOWUP
-            #     logger.info(
-            #         f"[{ts_code}-{trade_date}] 当日买入未涨停，生成次日{self.SELL_TYPE_AFTER_BLOWUP}卖出信号（配置项控制）")
-            # elif pos.hold_days > 0 and not is_limit:
-            #     sell_signal_map[ts_code] = "close"
-            #     logger.info(f"[{ts_code}-{trade_date}] 持仓超1天未涨停，生成当日收盘卖出信号")
-            # 核心修改后的代码段（替换原有if-elif）
             if pos.buy_date == self._unify_date_format(trade_date) and not is_limit:
                 # 仅当「当日买入（buy_date=当前交易日）」且未涨停时，生成次日炸板卖出信号
                 sell_signal_map[ts_code] = self.SELL_TYPE_AFTER_BLOWUP
@@ -435,7 +345,7 @@ class MultiLimitUpStrategy(BaseStrategy):
             elif pos.buy_date <= self._unify_date_format(trade_date) and not is_limit:
                 # 持仓超1天（或D+1日盘中hold_days=0但非当日买入）未涨停，生成当日收盘卖出信号
                 sell_signal_map[ts_code] = "close"
-            logger.info(f"[{ts_code}-{trade_date}] 持仓超{pos.hold_days}天（买入日期：{pos.buy_date}）未涨停，生成止损卖出信号")
+                logger.info(f"[{ts_code}-{trade_date}] 持仓超{pos.hold_days}天（买入日期：{pos.buy_date}）未涨停，生成止损卖出信号")
         # 计算可用仓位，生成买入信号
         available_pos = max(0, self.max_position_count - len(positions))
         buy_stocks = self.select_buy_stocks(trade_date, daily_df, available_pos)

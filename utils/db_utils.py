@@ -280,99 +280,100 @@ class DBConnector:
 db = DBConnector()
 
 if __name__ == "__main__":
-        """全量测试：修正主键重复后的版本"""
-        try:
-            logger.info("===== 开始执行数据库工具全量测试 =====")
-            logger.info("===== 1. 测试连接池初始化 =====")
-            logger.info("连接池初始化成功 ✅")
+    pass
+        # """全量测试：修正主键重复后的版本"""
+        # try:
+        #     logger.info("===== 开始执行数据库工具全量测试 =====")
+        #     logger.info("===== 1. 测试连接池初始化 =====")
+        #     logger.info("连接池初始化成功 ✅")
 
-            # ====================== 测试query（查询函数）======================
-            logger.info("\n===== 2. 测试query查询函数 =====")
-            # 测试1：查询股票基础信息前5条（返回字典列表）
-            sql_query_1 = "SELECT ts_code, name, industry FROM stock_basic LIMIT 5"
-            result_dict = db.query(sql_query_1)
-            logger.info(f"查询结果（字典列表）：\n{result_dict[:2]}...")  # 只打印前2条避免过长
-
-            # 测试2：查询交易日历（返回DataFrame，量化场景常用）
-            sql_query_2 = "SELECT trade_date, is_open FROM trade_calendar WHERE trade_date >= %s LIMIT 3"
-            params_query_2 = ("2024-01-01",)
-            result_df = db.query(sql_query_2, params_query_2, return_df=True)
-            logger.info(f"查询结果（DataFrame）：\n{result_df}")
-
-            # ====================== 测试execute（单条执行）======================
-            logger.info("\n===== 3. 测试execute单条执行函数（插入+更新+删除） =====")
-            # 插入前清理kline_day测试数据
-            sql_clean_kline_day_pre = "DELETE FROM kline_day WHERE ts_code = %s AND trade_date = %s"
-            db.execute(sql_clean_kline_day_pre, ("600000.SH", "2024-01-02"))
-
-            # 测试1：插入测试数据到kline_day（ts_code长度修正为9位）
-            sql_execute_insert = """
-                INSERT INTO kline_day (ts_code, trade_date, open, high, low, close, volume, amount)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """
-            params_execute_insert = ("600000.SH", "2024-01-02", 8.0, 8.1, 7.9, 8.05, 10000, 80500.0)
-            insert_rows = db.execute(sql_execute_insert, params_execute_insert)
-            logger.info(f"单条插入影响行数：{insert_rows}")
-
-            # 测试2：更新测试数据（修改涨跌幅）
-            sql_execute_update = "UPDATE kline_day SET pct_chg = %s WHERE ts_code = %s AND trade_date = %s"
-            params_execute_update = (0.625, "600000.SH", "2024-01-02")
-            update_rows = db.execute(sql_execute_update, params_execute_update)
-            logger.info(f"单条更新影响行数：{update_rows}")
-
-            # ====================== 测试batch_execute（批量执行）======================
-            logger.info("\n===== 4. 测试batch_execute批量执行函数 =====")
-            # 插入前清理trade_calendar测试数据（核心修正：避免主键重复）
-            sql_clean_batch = "DELETE FROM trade_calendar WHERE exchange = %s AND trade_date >= %s"
-            db.execute(sql_clean_batch, ("SH", "2024-01-01"))
-
-            # 测试：批量插入3条交易日历测试数据
-            sql_batch = "INSERT INTO trade_calendar (exchange, trade_date, is_open, is_holiday, weekday) VALUES (%s, %s, %s, %s, %s)"
-            params_batch_list = [
-                ("SH", "2024-01-01", 0, 1, 1),
-                ("SH", "2024-01-02", 1, 0, 2),
-                ("SH", "2024-01-03", 1, 0, 3)
-            ]
-            batch_rows = db.batch_execute(sql_batch, params_batch_list)
-            logger.info(f"批量插入影响行数：{batch_rows}")
-
-            # ====================== 测试batch_insert_df（DataFrame批量插入）======================
-            logger.info("\n===== 5. 测试batch_insert_df DataFrame批量插入 =====")
-            # 插入前清理kline_1min测试数据
-            sql_clean_kline_1min_pre = "DELETE FROM kline_1min WHERE ts_code = %s AND trade_date = %s"
-            db.execute(sql_clean_kline_1min_pre, ("600000.SH", "2024-01-02"))
-
-            # 构造1分钟K线测试DataFrame
-            test_df = pd.DataFrame({
-                "ts_code": ["600000.SH", "600000.SH"],
-                "trade_time": ["2024-01-02 09:30:00", "2024-01-02 09:31:00"],
-                "trade_date": ["2024-01-02", "2024-01-02"],
-                "open": [8.0, 8.05],
-                "high": [8.02, 8.08],
-                "low": [7.98, 8.03],
-                "close": [8.01, 8.06],
-                "volume": [5000, 6000],
-                "amount": [40050.0, 48360.0]
-            })
-            df_insert_rows = db.batch_insert_df(test_df, "kline_1min")
-            logger.info(f"DataFrame批量插入影响行数：{df_insert_rows}")
-
-            # ====================== 清理测试数据（避免污染真实数据）======================
-            logger.info("\n===== 6. 清理测试数据 =====")
-            # 删除kline_day测试数据
-            sql_clean_kline_day = "DELETE FROM kline_day WHERE ts_code = %s AND trade_date = %s"
-            db.execute(sql_clean_kline_day, ("600000.SH", "2024-01-02"))
-
-            # 删除trade_calendar测试数据
-            sql_clean_calendar = "DELETE FROM trade_calendar WHERE trade_date >= %s AND exchange = %s"
-            db.execute(sql_clean_calendar, ("2024-01-01", "SH"))
-
-            # 删除kline_1min测试数据
-            sql_clean_kline_1min = "DELETE FROM kline_1min WHERE ts_code = %s AND trade_date = %s"
-            db.execute(sql_clean_kline_1min, ("600000.SH", "2024-01-02"))
-            logger.info("测试数据清理完成 ✅")
-
-            logger.info("\n===== 所有测试完成 ✅ =====")
-
-        except Exception as e:
-            logger.error(f"测试过程中出现异常：{str(e)} ❌")
+        #     # ====================== 测试query（查询函数）======================
+        #     logger.info("\n===== 2. 测试query查询函数 =====")
+        #     # 测试1：查询股票基础信息前5条（返回字典列表）
+        #     sql_query_1 = "SELECT ts_code, name, industry FROM stock_basic LIMIT 5"
+        #     result_dict = db.query(sql_query_1)
+        #     logger.info(f"查询结果（字典列表）：\n{result_dict[:2]}...")  # 只打印前2条避免过长
+        #
+        #     # 测试2：查询交易日历（返回DataFrame，量化场景常用）
+        #     sql_query_2 = "SELECT trade_date, is_open FROM trade_calendar WHERE trade_date >= %s LIMIT 3"
+        #     params_query_2 = ("2024-01-01",)
+        #     result_df = db.query(sql_query_2, params_query_2, return_df=True)
+        #     logger.info(f"查询结果（DataFrame）：\n{result_df}")
+        #
+        #     # ====================== 测试execute（单条执行）======================
+        #     logger.info("\n===== 3. 测试execute单条执行函数（插入+更新+删除） =====")
+        #     # 插入前清理kline_day测试数据
+        #     sql_clean_kline_day_pre = "DELETE FROM kline_day WHERE ts_code = %s AND trade_date = %s"
+        #     db.execute(sql_clean_kline_day_pre, ("600000.SH", "2024-01-02"))
+        #
+        #     # 测试1：插入测试数据到kline_day（ts_code长度修正为9位）
+        #     sql_execute_insert = """
+        #         INSERT INTO kline_day (ts_code, trade_date, open, high, low, close, volume, amount)
+        #         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        #         """
+        #     params_execute_insert = ("600000.SH", "2024-01-02", 8.0, 8.1, 7.9, 8.05, 10000, 80500.0)
+        #     insert_rows = db.execute(sql_execute_insert, params_execute_insert)
+        #     logger.info(f"单条插入影响行数：{insert_rows}")
+        #
+        #     # 测试2：更新测试数据（修改涨跌幅）
+        #     sql_execute_update = "UPDATE kline_day SET pct_chg = %s WHERE ts_code = %s AND trade_date = %s"
+        #     params_execute_update = (0.625, "600000.SH", "2024-01-02")
+        #     update_rows = db.execute(sql_execute_update, params_execute_update)
+        #     logger.info(f"单条更新影响行数：{update_rows}")
+        #
+        #     # ====================== 测试batch_execute（批量执行）======================
+        #     logger.info("\n===== 4. 测试batch_execute批量执行函数 =====")
+        #     # 插入前清理trade_calendar测试数据（核心修正：避免主键重复）
+        #     sql_clean_batch = "DELETE FROM trade_calendar WHERE exchange = %s AND trade_date >= %s"
+        #     db.execute(sql_clean_batch, ("SH", "2024-01-01"))
+        #
+        #     # 测试：批量插入3条交易日历测试数据
+        #     sql_batch = "INSERT INTO trade_calendar (exchange, trade_date, is_open, is_holiday, weekday) VALUES (%s, %s, %s, %s, %s)"
+        #     params_batch_list = [
+        #         ("SH", "2024-01-01", 0, 1, 1),
+        #         ("SH", "2024-01-02", 1, 0, 2),
+        #         ("SH", "2024-01-03", 1, 0, 3)
+        #     ]
+        #     batch_rows = db.batch_execute(sql_batch, params_batch_list)
+        #     logger.info(f"批量插入影响行数：{batch_rows}")
+        #
+        #     # ====================== 测试batch_insert_df（DataFrame批量插入）======================
+        #     logger.info("\n===== 5. 测试batch_insert_df DataFrame批量插入 =====")
+        #     # 插入前清理kline_1min测试数据
+        #     sql_clean_kline_1min_pre = "DELETE FROM kline_1min WHERE ts_code = %s AND trade_date = %s"
+        #     db.execute(sql_clean_kline_1min_pre, ("600000.SH", "2024-01-02"))
+        #
+        #     # 构造1分钟K线测试DataFrame
+        #     test_df = pd.DataFrame({
+        #         "ts_code": ["600000.SH", "600000.SH"],
+        #         "trade_time": ["2024-01-02 09:30:00", "2024-01-02 09:31:00"],
+        #         "trade_date": ["2024-01-02", "2024-01-02"],
+        #         "open": [8.0, 8.05],
+        #         "high": [8.02, 8.08],
+        #         "low": [7.98, 8.03],
+        #         "close": [8.01, 8.06],
+        #         "volume": [5000, 6000],
+        #         "amount": [40050.0, 48360.0]
+        #     })
+        #     df_insert_rows = db.batch_insert_df(test_df, "kline_1min")
+        #     logger.info(f"DataFrame批量插入影响行数：{df_insert_rows}")
+        #
+        #     # ====================== 清理测试数据（避免污染真实数据）======================
+        #     logger.info("\n===== 6. 清理测试数据 =====")
+        #     # 删除kline_day测试数据
+        #     sql_clean_kline_day = "DELETE FROM kline_day WHERE ts_code = %s AND trade_date = %s"
+        #     db.execute(sql_clean_kline_day, ("600000.SH", "2024-01-02"))
+        #
+        #     # 删除trade_calendar测试数据
+        #     sql_clean_calendar = "DELETE FROM trade_calendar WHERE trade_date >= %s AND exchange = %s"
+        #     db.execute(sql_clean_calendar, ("2024-01-01", "SH"))
+        #
+        #     # 删除kline_1min测试数据
+        #     sql_clean_kline_1min = "DELETE FROM kline_1min WHERE ts_code = %s AND trade_date = %s"
+        #     db.execute(sql_clean_kline_1min, ("600000.SH", "2024-01-02"))
+        #     logger.info("测试数据清理完成 ✅")
+        #
+        #     logger.info("\n===== 所有测试完成 ✅ =====")
+        #
+        # except Exception as e:
+        #     logger.error(f"测试过程中出现异常：{str(e)} ❌")
