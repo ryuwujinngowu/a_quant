@@ -1,20 +1,19 @@
 import pandas as pd
 from config.config import MAX_POSITION_COUNT
-from utils.common_tools import get_trade_dates,get_daily_kline_data
+from utils.common_tools import get_trade_dates, get_daily_kline_data
 from backtest.account import Account
 from backtest.metrics import BacktestMetrics
 from data.data_cleaner import data_cleaner
 from data.data_fetcher import data_fetcher
 from strategies.base_strategy import BaseStrategy
-from utils.db_utils import db  # 正确导入数据库工具
+from utils.db_utils import db
 from utils.log_utils import logger
 
 
 class MultiStockBacktestEngine:
-    """全市场多标的回测引擎（性能优化版：缓存+预加载+索引优化）"""
+    """全市场多标的回测引擎（新增一字涨跌停拦截，完全贴合实盘撮合规则）"""
 
     def __init__(
-
             self,
             strategy: BaseStrategy,
             init_capital: float,
@@ -25,109 +24,144 @@ class MultiStockBacktestEngine:
         self.init_capital = init_capital
         self.start_date = start_date
         self.end_date = end_date
-        # 初始化账户
         self.account = Account(init_capital=init_capital, max_position_count=MAX_POSITION_COUNT)
-        # 回测结果
         self.result = {}
         self.account.set_backtest_info(
-            strategy_name=self.strategy.strategy_name,  # 你的策略名称
-            start_date=str(self.start_date),  # 回测开始日期（和引擎的start_date一致）
-            end_date=str(self.end_date)  # 回测结束日期（和引擎的end_date一致）
+            strategy_name=self.strategy.strategy_name,
+            start_date=str(self.start_date),
+            end_date=str(self.end_date)
         )
-
-
 
     def run(self) -> dict:
         """执行回测核心流程"""
         logger.info(
             f"===== 开始回测，初始本金：{self.init_capital}元，回测时间段：{self.start_date} 至 {self.end_date} =====")
-        # 初始化策略
         self.strategy.initialize()
         trade_dates = get_trade_dates(self.start_date, self.end_date)
         for idx, trade_date in enumerate(trade_dates):
             logger.info(f"===== 处理交易日：{trade_date}（第{idx + 1}/{len(trade_dates)}天） =====")
-            # 1. 获取当日全市场日线数据
+            # 1. 获取当日全市场日线数据（包含open/high/low/close/pre_close，用于一字板判断）
             daily_df = get_daily_kline_data(trade_date)
             if daily_df.empty:
                 logger.warning(f"{trade_date} 无有效日线数据，跳过当日")
                 continue
 
-            # ========== 【修改点1：修复上一日open信号执行逻辑，只删除已执行的open信号，保留close】 ==========
-            # 3. 执行上一日的开盘卖出信号
-            open_sell_ts_codes = []  # 记录已执行open卖出的股票
+            # ========== 【修改点1：开盘卖出信号执行，新增一字跌停拦截】 ==========
+            open_sell_ts_codes = []
             for ts_code, sell_type in list(self.strategy.sell_signal_map.items()):
                 if sell_type == "open":
+                    # 1.1 先获取该股票当日数据
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
-                    if not stock_df.empty:
-                        open_price = stock_df["open"].iloc[0]
-                        if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=open_price):
-                            open_sell_ts_codes.append(ts_code)
-            # 只删除已执行的open信号，保留close信号（用于炸板止损）
+                    if stock_df.empty:
+                        logger.warning(f"{trade_date} 开盘卖出：{ts_code} 无当日日线数据，跳过")
+                        continue
+
+                    # 1.2 【核心拦截】判断当日是否一字跌停，无法卖出
+                    pre_close = stock_df["pre_close"].iloc[0]
+                    limit_down_price = self.strategy.calc_limit_down_price(ts_code, pre_close)
+                    open_price = stock_df["open"].iloc[0]
+                    high_price = stock_df["high"].iloc[0]
+
+                    # 一字跌停判断：全天封死跌停，无法卖出
+                    is_limit_down_lock = (open_price <= limit_down_price + 0.001) and (
+                                high_price <= limit_down_price + 0.001)
+                    if is_limit_down_lock:
+                        logger.warning(
+                            f"{trade_date} 开盘卖出拦截：{ts_code} 当日一字跌停，无法卖出，信号保留至下一交易日")
+                        continue  # 不删除信号，保留到下一个交易日继续尝试
+
+                    # 1.3 非一字跌停，正常执行卖出
+                    if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=open_price):
+                        open_sell_ts_codes.append(ts_code)
+
+            # 只删除已成功执行的open信号，未执行的信号保留
             for ts_code in open_sell_ts_codes:
                 if ts_code in self.strategy.sell_signal_map:
                     del self.strategy.sell_signal_map[ts_code]
-            # ❌ 移除原有的“清空整个sell_signal_map”代码 → 保留close信号
 
-            # ========== 【保留你原有逻辑：第一次生成信号，仅获取买入列表】 ==========
+            # ========== 【修改点2：第一次生成信号，获取买入列表】 ==========
             buy_stocks, _ = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
                 positions=self.account.positions
             )
 
-            # 5. 执行买入操作（按可用仓位买入）
+            # ========== 【修改点3：买入执行环节，新增一字涨停拦截】 ==========
             available_count = self.account.get_available_position_count()
             if available_count > 0 and buy_stocks:
                 logger.info(f"[{trade_date}] 开始执行买入操作 | 可用仓位：{available_count} | 买入列表：{buy_stocks}")
                 for ts_code in buy_stocks[:available_count]:
-                    # 1. 筛选当前股票的当日日线数据
+                    # 3.1 获取该股票当日数据
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
                     if stock_df.empty:
                         logger.warning(f"{trade_date} 买入操作：{ts_code} 无当日日线数据，跳过")
                         continue
-                    # 2. 从日线数据中取pre_close（上一日收盘价）
+
+                    # 3.2 【核心拦截】判断当日是否一字涨停，无法买入
                     pre_close = stock_df["pre_close"].iloc[0]
-                    # 3. 保留原有空值校验
+                    limit_up_price = self.strategy.calc_limit_up_price(ts_code, pre_close)
+                    open_price = stock_df["open"].iloc[0]
+                    low_price = stock_df["low"].iloc[0]
+
+                    # 一字涨停判断：全天封死涨停，无法买入
+                    is_limit_up_lock = (open_price >= limit_up_price - 0.001) and (low_price >= limit_up_price - 0.001)
+                    if is_limit_up_lock:
+                        logger.warning(f"{trade_date} 买入拦截：{ts_code} 当日一字涨停，无法买入，跳过")
+                        continue  # 直接跳过，不执行买入
+
+                    # 3.3 非一字涨停，正常执行买入
                     if pre_close <= 0:
                         logger.warning(f"{trade_date} 买入操作：{ts_code} pre_close={pre_close}（无效值），跳过")
                         continue
-                    # 4. 计算涨停价（原有逻辑）
-                    limit_up_price = self.strategy.calc_limit_up_price(ts_code, pre_close)
                     if limit_up_price <= 0:
                         logger.warning(f"{trade_date} 买入操作：{ts_code} 涨停价计算无效（{limit_up_price}），跳过")
                         continue
-                    # 执行买入操作
                     self.account.buy(trade_date=trade_date, ts_code=ts_code, price=limit_up_price)
-                    # logger.info(f"{trade_date} 买入成功 | 股票：{ts_code} | 涨停价：{limit_up_price}元")
             else:
                 logger.info(f"{trade_date} 无可用仓位或无买入信号，跳过买入操作")
 
-            # ========== 【保留你原有逻辑：第二次生成信号，获取卖出信号】 ==========
+            # ========== 【修改点4：第二次生成信号，获取卖出信号】 ==========
             _, sell_signal_map = self.strategy.generate_signal(
                 trade_date=trade_date,
                 daily_df=daily_df,
                 positions=self.account.positions
             )
 
-            # ========== 【修改点2：合并上一日遗留的close信号 + 当日新生成的close信号】 ==========
-            # 先保留上一日未执行的close信号，再合并当日新生成的close信号
+            # 合并上一日未执行的信号 + 当日新生成的信号
             for ts_code, sell_type in self.strategy.sell_signal_map.items():
-                if sell_type == "close" and ts_code not in sell_signal_map:
+                if ts_code not in sell_signal_map:
                     sell_signal_map[ts_code] = sell_type
-            # 更新策略的sell_signal_map（供次日执行）
             self.strategy.sell_signal_map = sell_signal_map
 
-            # ========== 【修改点3：执行当日收盘close信号（合并后的所有close信号）】 ==========
-            # 6. 执行当日收盘卖出信号
-            close_sell_ts_codes = []  # 记录已执行close卖出的股票
+            # ========== 【修改点5：收盘卖出信号执行，新增一字跌停拦截】 ==========
+            close_sell_ts_codes = []
             for ts_code, sell_type in sell_signal_map.items():
                 if sell_type == "close":
+                    # 5.1 获取该股票当日数据
                     stock_df = daily_df[daily_df["ts_code"] == ts_code]
-                    if not stock_df.empty:
-                        close_price = stock_df["close"].iloc[0]
-                        if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=close_price):
-                            close_sell_ts_codes.append(ts_code)
-            # 执行完close信号后，从策略的sell_signal_map中删除（避免次日重复执行）
+                    if stock_df.empty:
+                        logger.warning(f"{trade_date} 收盘卖出：{ts_code} 无当日日线数据，跳过")
+                        continue
+
+                    # 5.2 【核心拦截】判断当日是否一字跌停，无法卖出
+                    pre_close = stock_df["pre_close"].iloc[0]
+                    limit_down_price = self.strategy.calc_limit_down_price(ts_code, pre_close)
+                    open_price = stock_df["open"].iloc[0]
+                    high_price = stock_df["high"].iloc[0]
+
+                    is_limit_down_lock = (open_price <= limit_down_price + 0.001) and (
+                                high_price <= limit_down_price + 0.001)
+                    if is_limit_down_lock:
+                        logger.warning(
+                            f"{trade_date} 收盘卖出拦截：{ts_code} 当日一字跌停，无法卖出，信号保留至下一交易日")
+                        continue  # 不删除信号，保留到下一个交易日
+
+                    # 5.3 非一字跌停，正常执行卖出
+                    close_price = stock_df["close"].iloc[0]
+                    if self.account.sell(trade_date=trade_date, ts_code=ts_code, price=close_price):
+                        close_sell_ts_codes.append(ts_code)
+
+            # 只删除已成功执行的close信号，未执行的信号保留
             for ts_code in close_sell_ts_codes:
                 if ts_code in self.strategy.sell_signal_map:
                     del self.strategy.sell_signal_map[ts_code]
@@ -139,10 +173,8 @@ class MultiStockBacktestEngine:
         logger.info("===== 回测结束，强制清仓剩余持仓 =====")
         last_date = trade_dates[-1]
         last_daily_df = get_daily_kline_data(last_date)
-        # 核心修正：将positions.keys()转为列表（静态迭代，避免字典大小变化）
-        hold_stocks = list(self.account.positions.keys())  # 先转成列表，固定迭代对象
+        hold_stocks = list(self.account.positions.keys())
         for ts_code in hold_stocks:
-            # 补充校验：防止迭代过程中该股票已被卖出（避免重复操作）
             try:
                 if ts_code not in self.account.positions:
                     continue
@@ -177,9 +209,21 @@ class MultiStockBacktestEngine:
             logger.info(f"{k}：{v}")
         logger.info("=" * 60)
 
-        # 回测结束清空临时表
-        #data_cleaner.truncate_kline_min_table()
-        #data_cleaner.truncate_trade_cal_table()
+        # 新增：打印单标的盈亏排名
+        profit_top, loss_top = self.account.get_stock_pnl_ranking()
+        if not profit_top.empty:
+            logger.info("=" * 60)
+            logger.info("【盈利最多的Top10股票】")
+            logger.info("=" * 60)
+            for idx, row in profit_top.iterrows():
+                logger.info(f"  {idx + 1}. {row['ts_code']}：累计净盈亏 {round(row['累计净盈亏'], 2)} 元")
+        if not loss_top.empty:
+            logger.info("=" * 60)
+            logger.info("【亏损最多的Top10股票】")
+            logger.info("=" * 60)
+            for idx, row in loss_top.iterrows():
+                logger.info(f"  {idx + 1}. {row['ts_code']}：累计净盈亏 {round(row['累计净盈亏'], 2)} 元")
+        logger.info("=" * 60)
 
         # 附加详细数据
         self.result["net_value_df"] = net_value_df
