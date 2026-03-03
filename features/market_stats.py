@@ -362,6 +362,6 @@ if __name__ == "__main__":
         callable= SectorHeatFeature()
         tag = callable._gen_factor_columns()
         #获取目标
-        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-02")
-        print(top3_sector)
+        # top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-02")
+        print(tag)
 

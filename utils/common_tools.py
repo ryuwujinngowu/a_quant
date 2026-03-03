@@ -10,7 +10,7 @@ from pathlib import Path
 import functools
 from typing import List, Dict, Optional
 from typing import Tuple
-from config.config import MAIN_BOARD_LIMIT_UP_RATE, STAR_BOARD_LIMIT_UP_RATE, BJ_BOARD_LIMIT_UP_RATE
+# from config.config import MAIN_BOARD_LIMIT_UP_RATE, STAR_BOARD_LIMIT_UP_RATE, BJ_BOARD_LIMIT_UP_RATE
 from utils.db_utils import db
 from utils.log_utils import logger
 from typing import List, Dict

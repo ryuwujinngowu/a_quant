@@ -3,7 +3,7 @@
 VERSION = "v1.3"
 
 # ===================== 回测基础配置 =====================
-DEFAULT_INIT_CAPITAL = 100000  # 默认初始本金
+DEFAULT_INIT_CAPITAL = 1000000  # 默认初始本金
 COMMISSION_RATE = 0.0001       # 交易手续费（万1，双向）
 STAMP_DUTY_RATE = 0.001        # 印花税（千1，仅卖出）
 SLIPPAGE_RATE = 0.001          # 滑点比例
