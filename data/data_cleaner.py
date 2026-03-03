@@ -596,128 +596,61 @@ class DataCleaner:
     #         logger.error(f"交易日历表清空失败：{str(e)}", exc_info=True)
 
     def clean_and_insert_kline_day_qfq(
-            self,
-            ts_code: Union[str, List[str]],  # 支持单股票代码/多股票代码列表
-            start_date: str,  # 开始日期（格式：YYYYMMDD）
-            end_date: Optional[str] = None,  # 结束日期（格式：YYYYMMDD），不传默认到当日
-            table_name: str = "kline_day_qfq"  # 目标表名
+            self,  # 类方法必须有self，调用时由实例自动传递，无需手动传
+            ts_code: Union[str, List[str]],
+            start_date: str,
+            end_date: Optional[str] = None,
+            table_name: str = "kline_day_qfq"
     ) -> Optional[int]:
         """
-        精准入库指定股票、指定时间段的前复权日K数据（复用已有清洗逻辑）
-        Args:
-            ts_code: 股票代码，支持单个（如"600000.SH"）或列表（如["600000.SH", "000001.SZ"]）
-            start_date: 开始日期，格式YYYYMMDD
-            end_date: 结束日期，格式YYYYMMDD，不传则默认取当日日期
-            table_name: 目标入库表名，kline_day_qfq
-        Returns:
-            累计入库/更新行数，失败返回0
+        极简版：先查库再请求（修复参数传递错误）
+        核心：仅保留「查库→请求→入库」核心逻辑，无冗余
         """
-        # 处理结束日期：不传则默认当日，格式化为YYYYMMDD
+        # 处理结束日期（必要逻辑）
         if not end_date:
             end_date = datetime.datetime.now().strftime("%Y%m%d")
-            logger.debug(f"未传入结束日期，默认取当日：{end_date}")
         else:
-            # 校验结束日期格式
             if len(end_date) != 8:
-                logger.error("结束日期（end_date）格式错误，需为YYYYMMDD，终止入库")
+                logger.error("结束日期格式错误（需YYYYMMDD），终止入库")
                 return 0
 
-        # 统一将股票代码转为列表（兼容单/多股票）
+        # 统一转列表+去重（必要逻辑）
         stock_codes = [ts_code] if isinstance(ts_code, str) else ts_code
-        # 去重（避免重复处理）
         stock_codes = list(set(stock_codes))
-        logger.info(f"目标股票：{stock_codes} | 时间范围：{start_date} ~ {end_date} | 目标表：{table_name}")
-
-        # ===================== 2. 前置准备（复用原有逻辑） =====================
-        db_cols = self._get_db_columns(table_name)
-        # 复用日线字段类型映射（表结构完全一致）
-        kline_col_map = {
-            "ts_code": "VARCHAR(9) NOT NULL DEFAULT 'UNKNOWN'",
-            "trade_date": "DATE NOT NULL DEFAULT '1970-01-01'",
-            "open": "FLOAT DEFAULT 0",
-            "high": "FLOAT DEFAULT 0",
-            "low": "FLOAT DEFAULT 0",
-            "close": "FLOAT DEFAULT 0",
-            "pre_close": "FLOAT DEFAULT 0",
-            "change1": "FLOAT DEFAULT 0",
-            "pct_chg": "FLOAT DEFAULT 0",
-            "volume": "BIGINT DEFAULT 0",
-            "amount": "DECIMAL(18,2) DEFAULT 0.00",
-            "turnover_rate": "FLOAT DEFAULT 0",
-            "swing": "FLOAT DEFAULT 0",
-            "limit_up": "FLOAT DEFAULT 0",
-            "limit_down": "FLOAT DEFAULT 0",
-            "update_time": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            "reserved": "VARCHAR(128) DEFAULT ''"
-        }
-
-        # ===================== 3. 初始化统计指标 =====================
-        total_success = 0
-        total_failed = 0
         total_ingest_rows = 0
-        failed_codes = []
 
-        # ===================== 4. 循环处理指定股票 =====================
-        for idx, ts_code in enumerate(stock_codes):
-            logger.info(f"处理进度：{idx + 1}/{len(stock_codes)} | 股票代码：{ts_code}（前复权）")
+        # 核心逻辑：先查库，再请求
+        for ts_code in stock_codes:
             try:
-                # 核心：仅请求指定股票+指定时间段的前复权数据
-                raw_df = data_fetcher.fetch_kline_day_qfq(
-                    ts_code=ts_code,
-                    start_date=start_date,
-                    end_date=end_date
-                )
+                # 1. 查库：判断是否已有数据（极简SQL）
+                query_sql = f"""
+                    SELECT 1 FROM {table_name} 
+                    WHERE ts_code = %s AND trade_date >= %s AND trade_date <= %s 
+                    LIMIT 1
+                """
+                has_data = db.query(query_sql, (ts_code, start_date, end_date))
+                if has_data:
+                    # logger.info(f"{ts_code} 库中已有数据，跳过")
+                    continue
+
+                # 2. 无数据则请求接口
+                raw_df = data_fetcher.fetch_kline_day_qfq(ts_code, start_date, end_date)
                 if raw_df.empty:
-                    logger.warning(f"{ts_code} 在{start_date}~{end_date}范围内无前复权日K数据，跳过")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
+                    logger.warning(f"{ts_code} 无接口数据")
                     continue
 
-                # 复用已有日K清洗逻辑（字段一致，无需修改）
+                # 3. 清洗+入库（复用原有逻辑，无修改）
                 cleaned_df = self._clean_kline_day_data(raw_df)
-                if cleaned_df.empty:
-                    logger.warning(f"{ts_code} 前复权日K数据清洗后无有效数据，跳过")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
+                final_df = self._align_df_with_db(cleaned_df, table_name)
+                if final_df.empty:
                     continue
 
-                # 自动新增缺失字段（复用通用方法）
-                missing_cols = [col for col in cleaned_df.columns if col not in db_cols]
-                # if missing_cols:
-                #     logger.info(f"表{table_name}缺失字段：{missing_cols}，开始自动新增")
-                #     auto_add_missing_table_columns(
-                #         table_name=table_name,
-                #         missing_columns=missing_cols,
-                #         col_type_mapping=kline_col_map
-                #     )
-                #     db_cols = self._get_db_columns(table_name)  # 刷新字段
-                #
-                # # 对齐数据库字段（复用通用方法）
-                final_df = self._align_df_with_db(cleaned_df, table_name)
-
-                # 批量入库（复用db工具）
-                affected_rows = db.batch_insert_df(
-                    df=final_df,
-                    table_name=table_name,
-                    ignore_duplicate=True
-                )
-                if affected_rows:
-                    total_ingest_rows += affected_rows
-                    total_success += 1
-                    logger.debug(f"{ts_code} 前复权日K数据入库完成，影响行数：{affected_rows}")
-                else:
-                    logger.warning(f"{ts_code} 前复权日K入库无影响行数（数据已存在/无有效数据）")
-                    total_failed += 1
-                    failed_codes.append(ts_code)
+                affected_rows = db.batch_insert_df(final_df, table_name, ignore_duplicate=True)
+                total_ingest_rows += affected_rows or 0
 
             except Exception as e:
-                logger.error(f"{ts_code} 前复权日K处理失败：{str(e)}", exc_info=True)
-                total_failed += 1
-                failed_codes.append(ts_code)
-                continue
-        logger.debug(f"总处理股票数：{len(stock_codes)} | 成功：{total_success} | 失败：{total_failed}")
-        if failed_codes:
-            logger.warning(f"失败股票代码：{failed_codes}")
+                logger.error(f"{ts_code} 处理失败：{str(e)}")
+
         return total_ingest_rows
 
 

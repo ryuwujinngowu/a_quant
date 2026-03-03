@@ -31,7 +31,7 @@ class TechnicalFeatures:
         :return: 前复权K线DataFrame（空则返回空DF）
         """
         # 1. 先入库前复权数据（确保数据存在）
-        self.logger.info(f"开始获取{ts_code}前复权K线数据（{start_date}~{end_date}）")
+        # self.logger.info(f"开始获取{ts_code}前复权K线数据（{start_date}~{end_date}）")
         affected_rows = data_cleaner.clean_and_insert_kline_day_qfq(
             ts_code=ts_code,
             start_date=start_date,
@@ -127,7 +127,6 @@ class TechnicalFeatures:
         # ========== 5. 整理返回格式 ==========
         return_cols = ["ts_code", "trade_date", "close"] + [f"ma{day}" for day in ma_days]
         result_df = result_df[return_cols].sort_values("trade_date", ascending=True).reset_index(drop=True)
-        self.logger.info(f"{ts_code}均线计算完成，覆盖天数：{ma_days}，数据行数：{len(result_df)}")
         return result_df
 
 

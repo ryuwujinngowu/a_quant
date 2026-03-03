@@ -190,6 +190,7 @@ class DataFetcher:
         TUSHARE_TOKEN = TS_TOKEN_DEFAULT
         ts.set_token(TUSHARE_TOKEN)  # 初始化token
         try:
+            time.sleep(1.2)
             kline_qfq_df = ts.pro_bar(**params)
             logger.debug(f"前复权日线数据获取，参数：{params}，行数：{len(kline_qfq_df)}")
             return kline_qfq_df

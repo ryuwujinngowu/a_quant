@@ -4,6 +4,9 @@ from backtest.engine import MultiStockBacktestEngine
 from config.config import DEFAULT_INIT_CAPITAL
 from strategies.multi_limit_up_strategy import MultiLimitUpStrategy
 from strategies.sector_heat_strategy import SectorHeatStrategy
+from strategies.LimitUpPullback_Strategy import LimitUpPullback_Strategy
+from strategies.DoubleMA_Strategy import DoubleMA_Strategy
+from strategies.overSold import OversoldRebound_Strategy
 
 
 def main():
@@ -11,20 +14,28 @@ def main():
     #！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
     #=================有没有新概念，记得维护概念表================
     #========================================================
-    START_DATE = "2026-01-05"  # 回测开始日期
-    END_DATE = "2026-02-01"    # 回测结束日期
+    START_DATE = "2026-01-02"  # 回测开始日期
+    END_DATE = "2026-03-02"    # 回测结束日期
     INIT_CAPITAL = DEFAULT_INIT_CAPITAL  # 初始本金10W元
 
     # ===================== 初始化策略与回测引擎 =====================
-    strategy = MultiLimitUpStrategy()
+    strategy = DoubleMA_Strategy()
     engine = MultiStockBacktestEngine(
         strategy=strategy,
         init_capital=INIT_CAPITAL,
         start_date=START_DATE,
         end_date=END_DATE
     )
-
+    #
     # strategy = SectorHeatStrategy()
+    # engine = MultiStockBacktestEngine(
+    #     strategy=strategy,
+    #     init_capital=INIT_CAPITAL,
+    #     start_date=START_DATE,
+    #     end_date=END_DATE
+    # )
+
+    # strategy = LimitUpPullback_Strategy()
     # engine = MultiStockBacktestEngine(
     #     strategy=strategy,
     #     init_capital=INIT_CAPITAL,
