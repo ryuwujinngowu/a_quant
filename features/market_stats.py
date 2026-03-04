@@ -8,7 +8,10 @@
 """
 from typing import List, Dict, Tuple
 import pandas as pd
-from utils.common_tools import getStockRank_fortraining, getTagRank_daily
+import numpy as np
+# 【修改1】直接复用项目已有工具，删除冗余封装
+from utils.common_tools import get_trade_dates, get_daily_kline_data
+from data.data_cleaner import data_cleaner
 import re
 from utils.log_utils import logger
 from utils.db_utils import db
@@ -20,7 +23,7 @@ TIME_WEIGHT_MAP = {0: 1.0, -1: 0.8, -2: 0.6, -3: 0.4, -4: 0.2}
 TOTAL_DAYS = 5
 # 轮动速度计算固定权重
 OVERLAP_WEIGHT = 0.8  # 隔日权重，分数越高，隔日有强就算强
-HHI_WEIGHT = 0.2      # 弱但绵长
+HHI_WEIGHT = 0.2  # 弱但绵长
 MAIN_LINE_RULES = [
     {"level": "absolute", "appear": 4, "top2": 2, "coeff": 0.1},  # 绝对主线行情，出现4次，有两天排名在前二，直接轮动分打1折
     {"level": "strong", "appear": 3, "top2": 2, "coeff": 0.3},
@@ -49,36 +52,299 @@ class SectorHeatFeature(BaseFeature):
                 factor_cols.append(f"sector{sector_id}_{day_tag}_loss")
         return factor_cols
 
-    def calculate(self, daily_df: pd.DataFrame, trade_date: str) -> Tuple[pd.DataFrame, List[int], Dict[str, int]]:
+    # 【修改2】删除冗余的_get_lookback_trade_dates和_get_stock_daily_data方法，直接在calculate中调用
+
+    def _calculate_intraday_pattern_score(self, row: pd.Series, is_profit: bool = True) -> float:
         """
-        核心计算方法（对齐基类接口）
-        :param daily_df: 全市场日线数据（含个股所属板块、涨跌幅、成交量等）
-        :param trade_date: 当前计算日期（D日，格式：YYYY-MM-DD）
-        :return:
-            - sector_factor_df: 板块因子DataFrame，index=板块ID，columns=30个因子列
-            - top_sector_ids: 当日前3活跃板块ID列表 [1,2,3]
-            - stock_sector_map: 个股-所属板块映射 {ts_code: 所属板块ID}
-
+        【修改3】优化日内走势模式得分计算
+        :param row: 个股日线数据（必须包含open, close, pre_close）
+        :param is_profit: 是否为赚钱效应（True=profit，False=loss）
+        :return: 走势得分
         """
-        # ==================== 后续填充具体计算逻辑 ====================
-        # 1. 计算每日板块热度，筛选前3活跃板块，分配板块ID 1/2/3
-        # 2. 回溯5天，计算每个板块每日的赚钱/亏钱效应
-        # 3. 生成个股-所属板块的映射关系
-        # ==============================================================
+        open_price = row["open"]
+        close_price = row["close"]
+        pre_close = row["pre_close"]
 
-        # 预设空返回值（格式固定，后续填充真实数据）
-        sector_factor_df = pd.DataFrame(columns=self.factor_columns, index=[1,2,3])
-        top_sector_ids = [1,2,3]
-        stock_sector_map = {}
+        if pre_close <= 0:
+            return 0.0
 
-        return sector_factor_df, top_sector_ids, stock_sector_map
+        # 1. 计算开盘缺口幅度（直接*100作为得分）
+        open_gap_pct = (open_price / pre_close - 1) * 100
 
-    def get_factor_columns(self) -> List[str]:
-        """获取30个因子列名，供数据集构建时调用"""
-        return self.factor_columns
+        # 2. 计算当日涨跌幅度（直接*100作为得分）
+        daily_pct = (close_price / pre_close - 1) * 100
 
+        if is_profit:
+            # Profit：高开幅度 + 当日涨幅
+            return round(open_gap_pct + daily_pct, 2)
+        else:
+            # Loss：低开幅度（绝对值） + 当日跌幅（绝对值）
+            return round(abs(open_gap_pct) + abs(daily_pct), 2)
 
+    def _calculate_hdi(self, row: pd.Series) -> float:
+        """
+        计算持股难易度HDI（Holding Difficulty Index）
+        忽略换手率和日内均线，只用日线数据计算
+        :param row: 个股日线数据（必须包含open, close, pre_close, high, low）
+        :return: HDI得分，0-100，越高越容易持有
+        """
+        pre_close = row["pre_close"]
+        if pre_close <= 0:
+            return 50.0  # 异常值默认50分
 
+        # 1. 日内振幅（振幅越小，越容易持有）
+        amplitude = (row["high"] - row["low"]) / pre_close * 100
+        amplitude_score = max(0, 100 - amplitude * 2)  # 振幅每增加1%，扣2分，封顶100分
+
+        # 2. 盘中最大回撤（从最高价到收盘价的回撤，越小越容易持有）
+        max_drawdown = (row["high"] - row["close"]) / pre_close * 100
+        drawdown_score = max(0, 100 - max_drawdown * 3)  # 回撤每增加1%，扣3分
+
+        # 3. 冲高回落绝对值（最高价-收盘价，越小越容易持有）
+        pullback = row["high"] - row["close"]
+        pullback_score = max(0, 100 - pullback * 10)  # 每回落0.1元，扣1分
+
+        # 4. 涨跌幅度绝对值（涨跌越温和，越容易持有）
+        pct_chg_abs = abs((row["close"] / pre_close) - 1) * 100
+        pct_chg_score = max(0, 100 - pct_chg_abs * 2)  # 涨跌每增加1%，扣2分
+
+        # 综合HDI得分（等权平均）
+        hdi = (amplitude_score + drawdown_score + pullback_score + pct_chg_score) / 4
+        return round(hdi, 2)
+
+    def _calculate_minute_boost_score(self, minute_df: pd.DataFrame, is_profit: bool = True) -> Tuple[
+        float, float, str]:
+        """
+        【修改4】完善分钟线拉升/下杀得分计算
+        :param minute_df: 分钟线DataFrame（来自data_cleaner.get_kline_min_by_stock_date）
+        :param is_profit: 是否为赚钱效应（True=profit找拉升，False=loss找下杀）
+        :return: (得分, 幅度, 时间)
+        """
+        if minute_df.empty:
+            return 50.0, 0.0, ""
+
+        try:
+            # 确保分钟线按时间排序
+            if "time" not in minute_df.columns:
+                return 50.0, 0.0, ""
+            minute_df = minute_df.sort_values("time").reset_index(drop=True)
+
+            # 以2分钟为维度，遍历120根分钟线（9:30-11:30 + 13:00-15:00）
+            max_boost_pct = 0.0
+            first_boost_time = ""
+            first_boost_pct = 0.0
+
+            for i in range(0, len(minute_df) - 1, 2):
+                # 取当前分钟和2分钟后的close
+                current_close = minute_df.iloc[i]["close"]
+                next_close = minute_df.iloc[i + 1]["close"]
+                current_time = minute_df.iloc[i]["time"]
+
+                if current_close <= 0:
+                    continue
+
+                # 计算2分钟涨跌幅
+                boost_pct = (next_close / current_close - 1) * 100
+
+                if is_profit:
+                    # Profit：找第一根上涨幅度大于4%的分钟线
+                    if boost_pct > 4.0 and first_boost_time == "":
+                        first_boost_time = current_time
+                        first_boost_pct = boost_pct
+                        break
+                    if boost_pct > max_boost_pct:
+                        max_boost_pct = boost_pct
+                else:
+                    # Loss：找第一根下跌幅度大于4%的分钟线
+                    if boost_pct < -4.0 and first_boost_time == "":
+                        first_boost_time = current_time
+                        first_boost_pct = abs(boost_pct)
+                        break
+                    if abs(boost_pct) > max_boost_pct:
+                        max_boost_pct = abs(boost_pct)
+
+            # 如果没找到第一根>4%的，用最大幅度
+            if first_boost_time == "":
+                return 50.0, max_boost_pct, ""
+
+            # 根据时间计算得分：9:45前得分最高，每往后15分钟递减
+            # 时间格式假设为 "HH:MM:SS"
+            try:
+                boost_hour = int(first_boost_time.split(":")[0])
+                boost_minute = int(first_boost_time.split(":")[1])
+                total_minutes = (boost_hour - 9) * 60 + boost_minute
+
+                # 9:45前（45分钟内）：100分
+                if total_minutes <= 45:
+                    score = 100.0
+                # 每往后15分钟，扣10分
+                else:
+                    minutes_past = total_minutes - 45
+                    score = max(0, 100 - (minutes_past // 15) * 10)
+            except:
+                score = 50.0
+
+            return round(score, 2), round(first_boost_pct, 2), first_boost_time
+
+        except Exception as e:
+            logger.debug(f"分钟线得分计算失败：{e}")
+            return 50.0, 0.0, ""
+
+    def calculate(
+            self,
+            trade_date: str,
+            top3_sectors_result: Dict,
+            sector_candidate_map: Dict[str, pd.DataFrame]
+    ) -> Dict[str, int]:
+        """
+        【核心方法】计算30个板块强度因子
+        :param trade_date: D日日期，格式yyyy-mm-dd
+        :param top3_sectors_result: select_top3_hot_sectors返回的结果，格式：{"top3_sectors": [...], "adapt_score": ...}
+        :param sector_candidate_map: 策略层传入的板块候选池，格式：{板块名: 候选个股DataFrame}
+        :return: 30个因子的字典，格式：{"sector1_d4_profit": 5, "sector1_d4_loss": 2, ...}
+        """
+        # 初始化因子字典，所有因子默认0
+        factor_dict = {col: 0 for col in self.factor_columns}
+
+        # 【修改5】直接调用utils.common_tools.get_trade_dates，删除冗余封装
+        try:
+            d_date = datetime.strptime(trade_date, "%Y-%m-%d")
+            start_date = (d_date - timedelta(days=20)).strftime("%Y-%m-%d")
+            all_trade_dates = get_trade_dates(start_date, trade_date)
+            if not all_trade_dates or len(all_trade_dates) < TOTAL_DAYS:
+                logger.error(f"[板块热度] 获取交易日失败，要求{TOTAL_DAYS}个")
+                return factor_dict
+            lookback_dates = all_trade_dates[-TOTAL_DAYS:]
+            day_tag_map = {f"d{4 - i}": date for i, date in enumerate(lookback_dates)}
+        except Exception as e:
+            logger.error(f"[板块热度] 获取交易日异常：{str(e)}")
+            return factor_dict
+
+        # 2. 获取所有候选股票的ts_code列表
+        all_candidate_ts_codes = []
+        for sector_df in sector_candidate_map.values():
+            if not sector_df.empty:
+                all_candidate_ts_codes.extend(sector_df["ts_code"].unique().tolist())
+        all_candidate_ts_codes = list(set(all_candidate_ts_codes))
+        if not all_candidate_ts_codes:
+            return factor_dict
+
+        # 【修改6】直接调用utils.common_tools.get_daily_kline_data，删除冗余封装
+        try:
+            all_dfs = []
+            for date in lookback_dates:
+                daily_df = get_daily_kline_data(trade_date=date, ts_code_list=all_candidate_ts_codes)
+                if not daily_df.empty:
+                    all_dfs.append(daily_df)
+            if not all_dfs:
+                return factor_dict
+            all_daily_df = pd.concat(all_dfs, ignore_index=True)
+        except Exception as e:
+            logger.error(f"[板块热度] 获取候选股票日线数据失败：{str(e)}")
+            return factor_dict
+
+        # 4. 遍历每个板块，计算30个因子
+        top3_sectors = top3_sectors_result.get("top3_sectors", [])
+        for sector_idx, sector_name in enumerate(top3_sectors, 1):
+            sector_prefix = f"sector{sector_idx}"
+            # 获取该板块的候选股票
+            sector_df = sector_candidate_map.get(sector_name, pd.DataFrame())
+            if sector_df.empty:
+                continue
+            sector_ts_codes = sector_df["ts_code"].unique().tolist()
+            # 筛选该板块候选股票的日线数据
+            sector_daily_df = all_daily_df[all_daily_df["ts_code"].isin(sector_ts_codes)]
+            if sector_daily_df.empty:
+                continue
+
+            # 遍历每个时间跨度（d4到d0）
+            for day_tag, target_date in day_tag_map.items():
+                # 筛选该交易日的数据
+                target_df = sector_daily_df[sector_daily_df["trade_date"] == target_date]
+                if target_df.empty:
+                    continue
+
+                # ==================== 分维度计算profit ====================
+                profit_df = target_df[target_df["pct_chg"] > 0].copy()
+                if not profit_df.empty:
+                    profit_dimensions = []
+                    for _, row in profit_df.iterrows():
+                        ts_code = row["ts_code"]
+
+                        # 【修改7】直接调用data_cleaner.get_kline_min_by_stock_date获取分钟线
+                        minute_df = data_cleaner.get_kline_min_by_stock_date(ts_code, target_date)
+
+                        # 维度1：优化后的日内走势得分
+                        pattern_score = self._calculate_intraday_pattern_score(row, is_profit=True)
+
+                        # 维度2：持股难易度HDI
+                        hdi_score = self._calculate_hdi(row)
+
+                        # 维度3：分钟线拉升得分
+                        minute_boost_score, boost_pct, boost_time = self._calculate_minute_boost_score(minute_df,
+                                                                                                       is_profit=True)
+
+                        profit_dimensions.append({
+                            "ts_code": ts_code,
+                            "pattern_score": pattern_score,
+                            "hdi_score": hdi_score,
+                            "minute_boost_score": minute_boost_score,
+                            "boost_pct": boost_pct,
+                            "boost_time": boost_time,
+                            "pct_chg": row["pct_chg"]
+                        })
+
+                    # 【预留】profit总分合并位置，现在先不计算
+                    # profit_total_score = ...
+
+                    # 暂时先用原有的profit计算方式（涨幅>7%的个股数）
+                    profit_count = len(profit_df[profit_df["pct_chg"] > 7.0])
+                    factor_dict[f"{sector_prefix}_{day_tag}_profit"] = profit_count
+
+                # ==================== 分维度计算loss ====================
+                loss_df = target_df[target_df["pct_chg"] < 0].copy()
+                if not loss_df.empty:
+                    loss_dimensions = []
+                    for _, row in loss_df.iterrows():
+                        ts_code = row["ts_code"]
+
+                        # 【修改7】直接调用data_cleaner.get_kline_min_by_stock_date获取分钟线
+                        minute_df = data_cleaner.get_kline_min_by_stock_date(ts_code, target_date)
+
+                        # 维度1：优化后的日内走势得分（loss模式）
+                        pattern_score = self._calculate_intraday_pattern_score(row, is_profit=False)
+
+                        # 维度2：持股难易度HDI（loss模式反转）############################                SEI情绪指数
+                        hdi_score = self._calculate_hdi(row)
+                        loss_hdi_score = 100 - hdi_score
+
+                        # 维度3：分钟线下杀得分
+                        minute_kill_score, kill_pct, kill_time = self._calculate_minute_boost_score(minute_df,
+                                                                                                    is_profit=False)
+
+                        loss_dimensions.append({
+                            "ts_code": ts_code,
+                            "pattern_score": pattern_score,
+                            "loss_hdi_score": loss_hdi_score,
+                            "minute_kill_score": minute_kill_score,
+                            "kill_pct": kill_pct,
+                            "kill_time": kill_time,
+                            "pct_chg": row["pct_chg"]
+                        })
+
+                    # 【预留】loss总分合并位置，现在先不计算
+                    # loss_total_score = ...
+
+                    # 暂时先用原有的loss计算方式（跌幅>7%的个股数）
+                    loss_count = len(loss_df[loss_df["pct_chg"] < -7.0])
+                    factor_dict[f"{sector_prefix}_{day_tag}_loss"] = loss_count
+
+        # ==================== breakpoint()暂停，方便调试 ====================
+        logger.info(f"[板块热度] 各维度数据计算完成，暂停调试 | 基准日：{trade_date}")
+        breakpoint()
+
+        logger.info(f"[板块热度] 30个因子计算完成 | 基准日：{trade_date}")
+        return factor_dict
 
 
     def select_top3_hot_sectors(self, trade_date: str) -> Dict:
@@ -189,7 +455,7 @@ class SectorHeatFeature(BaseFeature):
 
         if not sector_stats:
             logger.error(f"[板块热度] 无有效板块统计数据")
-            return {"top3_sectors": [], "adapt_score": 0}
+            # return {"top3_sectors": [], "adapt_score": 0}
 
         # -------------------- 5. 板块选取规则（严格按要求实现） --------------------
         # ========== 规则1：选取2个核心题材 ==========
@@ -360,8 +626,8 @@ class SectorHeatFeature(BaseFeature):
 
 if __name__ == "__main__":
         callable= SectorHeatFeature()
-        tag = callable._gen_factor_columns()
+        # tag = callable._gen_factor_columns()
         #获取目标
-        # top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-02")
-        print(tag)
+        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-04")
+        print(top3_sector)
 
