@@ -26,7 +26,7 @@ def train_sector_heat_model():
     # ===================== 训练参数配置（可根据需求调整） =====================
     TRAIN_START_DATE = "2023-01-01"  # 训练数据开始日期
     TRAIN_END_DATE = "2024-12-31"    # 训练数据结束日期
-    MODEL_SAVE_PATH = "models/sector_heat_xgb.pkl"  # 模型保存路径
+    MODEL_SAVE_PATH = "learnEngine/models/sector_heat_xgb.pkl"  # 模型保存路径
 
     # ===================== 1. 拉取历史日线数据 =====================
     try:

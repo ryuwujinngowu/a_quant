@@ -19,7 +19,7 @@ def main():
     INIT_CAPITAL = DEFAULT_INIT_CAPITAL  # 初始本金10W元
 
     # ===================== 初始化策略与回测引擎 =====================
-    strategy = SectorHeatStrategy()
+    strategy = LimitUpPullback_Strategy()
     engine = MultiStockBacktestEngine(
         strategy=strategy,
         init_capital=INIT_CAPITAL,
