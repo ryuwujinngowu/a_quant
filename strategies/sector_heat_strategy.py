@@ -353,9 +353,9 @@ class SectorHeatStrategy(BaseStrategy):
         buy_stocks = []
 
         # 轮动分大于40，板块轮动过快，今日空仓
-        if sectors_status['adapt_score'] >= 40:
-            logger.warning(f"[{self.strategy_name}] {trade_date} 板块轮动分{sectors_status['adapt_score']}≥40，轮动过快，今日空仓")
-            return buy_stocks, sell_signal_map
+        # if sectors_status['adapt_score'] >= 40:
+        #     logger.warning(f"[{self.strategy_name}] {trade_date} 板块轮动分{sectors_status['adapt_score']}≥40，轮动过快，今日空仓")
+        #     return buy_stocks, sell_signal_map
 
         logger.info(
             f"[{self.strategy_name}] {trade_date} 板块轮动分{sectors_status['adapt_score']}<40，开始执行选股，前3热点板块：{top3_sectors}")
