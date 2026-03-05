@@ -434,13 +434,13 @@ class SectorHeatStrategy(BaseStrategy):
                 logger.error(f"板块[{sector}]处理失败：{e}", exc_info=True)
                 sector_candidate_map[sector] = pd.DataFrame()
                 continue
-        print(sector_candidate_map)
-        breakpoint()
         sector_factors = self.sector_feature.calculate(
             trade_date=trade_date,
             top3_sectors_result=sectors_status,
             sector_candidate_map=sector_candidate_map
         )
+        print(sector_factors)
+        breakpoint()
         # ===================== 生成最终买入列表 =====================
         all_candidates = []
         for codes in sector_candidate_map.values():

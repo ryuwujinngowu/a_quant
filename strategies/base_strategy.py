@@ -15,6 +15,7 @@ from config.config import (
     BJ_BOARD_LIMIT_UP_RATE,
 )
 import pandas as pd
+from utils.common_tools import  calc_limit_up_price, calc_limit_down_price
 
 
 class BaseStrategy(ABC):
@@ -69,22 +70,7 @@ class BaseStrategy(ABC):
         :param pre_close: 前一日收盘价
         :return: 涨停价格（保留2位小数，无效值返回0.0）
         """
-        if not pre_close or pre_close <= 0:
-            logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0.0")
-            return 0.0
-        # 1. 判断板块类型，匹配对应涨跌幅
-        if ts_code.endswith(".BJ"):  # 北交所
-            limit_rate = BJ_BOARD_LIMIT_UP_RATE
-        elif ts_code.startswith(("300", "301", "302")) or (ts_code.startswith("3") and ts_code.endswith(".SZ")):  # 创业板
-            limit_rate = STAR_BOARD_LIMIT_UP_RATE
-        elif ts_code.startswith("688"):  # 科创板
-            limit_rate = STAR_BOARD_LIMIT_UP_RATE  # 科创板和创业板涨跌幅一致（20%）
-        else:  # 主板（60/00开头）
-            limit_rate = MAIN_BOARD_LIMIT_UP_RATE
-        limit_up_price = pre_close * (1 + limit_rate)
-        limit_up_price = round(limit_up_price, 2)
-        logger.debug(f"[{ts_code}] 前收盘价={pre_close}，涨停幅度={limit_rate}，涨停价={limit_up_price}")
-        return round(limit_up_price, 2)
+        return calc_limit_up_price(ts_code, pre_close)
 
     def calc_limit_down_price(self, ts_code: str, pre_close: float) -> float:
         """
@@ -93,25 +79,7 @@ class BaseStrategy(ABC):
         :param pre_close: 前一日收盘价
         :return: 跌停价格（保留2位小数，无效值返回0）
         """
-        if not pre_close or pre_close <= 0:
-            logger.debug(f"[{ts_code}] 前收盘价无效（pre_close={pre_close}），涨停价返回0.0")
-            return 0.0
-            # 1. 判断板块类型，匹配对应涨跌幅
-        if ts_code.endswith(".BJ"):  # 北交所
-            limit_rate = BJ_BOARD_LIMIT_UP_RATE
-        elif ts_code.startswith(("300", "301", "302")) or (ts_code.startswith("3") and ts_code.endswith(".SZ")):  # 创业板
-            limit_rate = STAR_BOARD_LIMIT_UP_RATE
-        elif ts_code.startswith("688"):  # 科创板
-            limit_rate = STAR_BOARD_LIMIT_UP_RATE  # 科创板和创业板涨跌幅一致（20%）
-        else:  # 主板（60/00开头）
-            limit_rate = MAIN_BOARD_LIMIT_UP_RATE
-
-        # 跌停价公式：前收盘价 × (1 - 涨跌幅系数)，四舍五入保留2位小数
-        limit_down_price = pre_close * (1 - limit_rate)
-        limit_down_price = round(limit_down_price, 2)
-
-        logger.debug(f"[{ts_code}] 前收盘价={pre_close}，跌停幅度={limit_rate}，跌停价={limit_down_price}")
-        return limit_down_price
+        return calc_limit_down_price(ts_code, pre_close)
 
     # ========== 可选扩展方法（子类按需重写） ==========
     def get_strategy_info(self) -> Dict[str, any]:
