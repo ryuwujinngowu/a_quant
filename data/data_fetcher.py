@@ -161,7 +161,7 @@ class DataFetcher:
             "start_date": start_date,
             "end_date": end_date
         })
-        logger.debug(f" 调用行情接口: {trade_date}")
+        # logger.debug(f" 调用行情接口: {trade_date}")
         try:
             kline_df = self.pro.daily(**params)
             logger.debug(f"日线数据获取，参数：{params}，行数：{len(kline_df)}")
@@ -529,22 +529,22 @@ class DataFetcher:
 data_fetcher = DataFetcher()
 
 if __name__ == "__main__":
-    # pass
+    pass
         # 初始化DataFetcher实例
-        data_fetcher = DataFetcher()
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.width', None)
-        # 1. 测试同花顺热榜-热股类型最新数据获取
-        logger.info("===== 测试1：获取同花顺热榜-热股最新数据 =====")
-        ths_hot_df = data_fetcher.fetch_ths_hot(
-            trade_date="20260226",  # 测试日期（按需调整）
-            market="热股",  # 热榜类型：热股
-            is_new="Y"  # 获取最新数据
-        )
-        if not ths_hot_df.empty:
-            logger.info(f"同花顺热榜数据预览（前3行）：\n{ths_hot_df}")
-        else:
-            logger.warning("同花顺热榜数据为空（可能日期未开盘/无数据）")
+        # data_fetcher = DataFetcher()
+        # pd.set_option('display.max_columns', None)
+        # pd.set_option('display.width', None)
+        # # 1. 测试同花顺热榜-热股类型最新数据获取
+        # logger.info("===== 测试1：获取同花顺热榜-热股最新数据 =====")
+        # ths_hot_df = data_fetcher.fetch_ths_hot(
+        #     trade_date="20260226",  # 测试日期（按需调整）
+        #     market="热股",  # 热榜类型：热股
+        #     is_new="Y"  # 获取最新数据
+        # )
+        # if not ths_hot_df.empty:
+        #     logger.info(f"同花顺热榜数据预览（前3行）：\n{ths_hot_df}")
+        # else:
+        #     logger.warning("同花顺热榜数据为空（可能日期未开盘/无数据）")
 
         # # 1. 测试单只股票单日期技术面因子获取
         # logger.info("===== 测试1：获取单只股票单日期技术面因子 =====")
@@ -631,28 +631,25 @@ if __name__ == "__main__":
 # """===================== 分钟线接口（fetch_stk_mins）专项测试用例 ====================="""
 #
 #
-# try:
-#     # 全局配置：显示所有列，方便查看返回结果
-#     pd.set_option('display.max_columns', None)
-#     pd.set_option('display.width', None)
-# #
-#     logger.info("===== 测试1：有效股票+完整交易日分钟线（1min） =====")
-#     # 测试标的：000001.SZ（平安银行，确保有数据）
-#     # 测试日期：2026-01-05（你的回测日期，交易日）
-#     mins_df_1 = data_fetcher.fetch_stk_mins(
-#         ts_code="605255.SH",
-#         freq="1min",
-#         start_date="2026-01-14 09:25:00",
-#         end_date="2026-01-14 15:00:00"
-#     )
-#     if not mins_df_1.empty:
-#         logger.info(f"✅ 有效股票分钟线获取成功，行数：{len(mins_df_1)}")
-#         logger.info(f"返回字段：{mins_df_1.columns.tolist()}")
-#         logger.info(f"前5行数据：\n{mins_df_1.head()}")
-#     else:
-#         logger.error(f"❌ 有效股票分钟线返回空（可能：日期非交易日/权限不足/接口无数据）")
-# except Exception as e:
-#     logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
+    try:
+        # 全局配置：显示所有列，方便查看返回结果
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', None)
+    #
+        logger.info("===== 测试1：有效股票+完整交易日分钟线（1min） =====")
+        # 测试标的：000001.SZ（平安银行，确保有数据）
+        # 测试日期：2026-01-05（你的回测日期，交易日）
+        mins_df_1 = data_fetcher.fetch_stk_mins(
+            ts_code="605255.SH",
+            freq="1min",
+            start_date="2026-03-05 09:25:00",
+            end_date="2026-03-05 15:00:00"
+        )
+        logger.info(f"✅ 有效股票分钟线获取成功，行数：{len(mins_df_1)}")
+        logger.info(f"返回字段：{mins_df_1.columns.tolist()}")
+        logger.info(f"前5行数据：\n{mins_df_1.head()}")
+    except Exception as e:
+        logger.error(f"❌ 分钟线接口测试崩溃，核心错误：{str(e)}", exc_info=True)
 
 
     # logger.info("===== 测试：获取交易日历数据 =====")

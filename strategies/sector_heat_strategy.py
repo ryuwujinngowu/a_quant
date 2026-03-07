@@ -12,6 +12,7 @@ from utils.common_tools import (
     filter_st_stocks,
     get_trade_dates,
     get_daily_kline_data,
+    sort_by_recent_gain
 )
 # 统一导入风格：核心配置 → 工具类 → 基类 → 业务组件
 from config.config import (
@@ -53,81 +54,6 @@ class SectorHeatStrategy(BaseStrategy):
         """
         self.clear_signal()
         self.hold_stock_dict.clear()
-
-    def _sort_by_recent_gain(self, df: pd.DataFrame, trade_date: str, day_count: int = 20) -> pd.DataFrame:
-        """
-        【通用任意天数涨幅排序】仅拉2天数据，性能最优
-        计算标准（对齐行情软件）：
-            近N日涨幅 = (今日收盘价 - 前第N+1天收盘价) / 前第N+1天收盘价 * 100
-            例：近3日涨幅 → 用前第4天收盘价为基准
-
-        :param df: 待排序的股票DataFrame（必须包含ts_code字段）
-        :param trade_date: 交易日（兼容YYYY-MM-DD/YYYYMMDD格式）
-        :param day_count: 【可选】近N日涨幅的N，默认20
-        :return: 按近N日涨幅降序排序后的DataFrame
-        """
-        # 入参防御
-        if df.empty or "ts_code" not in df.columns or day_count <= 0:
-            return df
-
-        # 1. 统一今日日期格式
-        try:
-            if len(trade_date) == 8 and trade_date.isdigit():
-                today_dt = datetime.strptime(trade_date, "%Y%m%d")
-                today_str = today_dt.strftime("%Y-%m-%d")
-            else:
-                today_dt = datetime.strptime(trade_date, "%Y-%m-%d")
-                today_str = trade_date
-        except ValueError:
-            return df
-
-        # 2. 取【前第N+1天】的交易日（对齐行情软件计算标准）
-        try:
-            # 往前推60天，确保能拿到足够的交易日（覆盖节假日）
-            start_dt = today_dt - timedelta(days=60)
-            trade_days = get_trade_dates(
-                start_date=start_dt.strftime("%Y-%m-%d"),
-                end_date=today_str
-            )
-            # 验证交易日数量是否足够
-            required_days = day_count + 1
-            if len(trade_days) < required_days:
-                logger.warning(f"近{day_count}日涨幅排序：可回溯交易日不足{required_days}个，返回原DataFrame")
-                return df
-            # 取前第N+1天的交易日
-            day_ago_str = trade_days[-required_days:][0]
-        except Exception:
-            return df
-
-        # ========================
-        # 核心：仅拉2天数据，仅查询目标股票
-        # ========================
-        target_codes = df["ts_code"].unique().tolist()
-        logger.info(
-            f"【近{day_count}日涨幅】仅取2天数据：前第{required_days}天[{day_ago_str}] + 今日[{today_str}]，目标股票{len(target_codes)}只")
-
-        # 第1次拉：前第N+1天的收盘价（仅查询目标股票）
-        df_ago = get_daily_kline_data(day_ago_str, ts_code_list=target_codes)
-        df_ago = df_ago[["ts_code", "close"]].rename(columns={"close": f"ago_{required_days}d_close"})
-
-        # 第2次拉：今日的收盘价（仅查询目标股票）
-        df_today = get_daily_kline_data(today_str, ts_code_list=target_codes)
-        df_today = df_today[["ts_code", "close"]].rename(columns={"close": "today_close"})
-
-        # 合并计算（无冗余筛选，因为get_daily_kline_data已过滤）
-        df = df.merge(df_today, on="ts_code", how="left").merge(df_ago, on="ts_code", how="left")
-        df = df.dropna(subset=["today_close", f"ago_{required_days}d_close"])
-
-        if df.empty:
-            return df
-
-        # 计算涨幅并排序（动态列名）
-        gain_col = f"recent_{day_count}d_gain"
-        df[gain_col] = (df["today_close"] / df[f"ago_{required_days}d_close"] - 1) * 100
-        df = df.sort_values(gain_col, ascending=False).reset_index(drop=True)
-
-        logger.info(f"【近{day_count}日涨幅】排序完成：有效股票{len(df)}只，最高涨幅{df[gain_col].iloc[0]:.2f}%")
-        return df
 
 
 
@@ -428,18 +354,19 @@ class SectorHeatStrategy(BaseStrategy):
                 # 保留近10日有涨停的股票
                 keep_ts_codes = [ts_code for ts_code, has_limit_up in has_limit_up_map.items() if has_limit_up]
                 filtered_df = sector_daily_df[sector_daily_df["ts_code"].isin(keep_ts_codes)]
-                filtered_df = self._sort_by_recent_gain(filtered_df, trade_date, day_count=20)  #对20日涨幅进行排序。
+                # filtered_df = sort_by_recent_gain(filtered_df, trade_date, day_count=20)  #对20日涨幅进行排序。
                 sector_candidate_map[sector] = filtered_df
             except Exception as e:
                 logger.error(f"板块[{sector}]处理失败：{e}", exc_info=True)
                 sector_candidate_map[sector] = pd.DataFrame()
                 continue
-        sector_factors = self.sector_feature.calculate(
+        sector_factors, factor_dict = self.sector_feature.calculate(
             trade_date=trade_date,
             top3_sectors_result=sectors_status,
             sector_candidate_map=sector_candidate_map
         )
         print(sector_factors)
+        print(factor_dict)
         breakpoint()
         # ===================== 生成最终买入列表 =====================
         all_candidates = []
