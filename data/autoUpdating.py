@@ -215,7 +215,7 @@ def is_trade_day(check_date: str) -> bool:
         dates = get_trade_dates(check_date, check_date)
         return check_date in dates
     except Exception as e:
-        logger.error(f"交易日历查询失败: {e}，假设今日不交易（保守策略）")
+        logger.warning(f"交易日历查询失败: {e}，假设今日不交易（保守策略）")
         return False
 
 
@@ -297,8 +297,5 @@ def run_server():
 
 
 if __name__ == "__main__":
-    if not logger.handlers:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     # 启动服务模式
     run_server()

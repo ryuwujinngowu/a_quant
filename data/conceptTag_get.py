@@ -16,7 +16,7 @@ def call_doubao_search_api(prompt: str) -> Dict:
     :param prompt: 输入提示词
     :return: 结构化响应 {"raw_text": "", "token_usage": {}, "error": None}
     """
-    API_KEY = ''
+    API_KEY = os.getenv('DOUBAO_API_KEY')
     API_URL = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"
     MODEL_ID = "bot-20260224232147-dfcct"
 
@@ -67,7 +67,6 @@ def call_doubao_search_api(prompt: str) -> Dict:
             }
 
         logger.info(f"API返回文本：\n{result['raw_text']}")
-        logger.info(f"Token消耗：输入{result['token_usage']['prompt_tokens']} | 输出{result['token_usage']['completion_tokens']}")
         return result
 
     except requests.exceptions.HTTPError as e:

@@ -6,20 +6,22 @@
 - 时间跨度：d4=4天前、d3=3天前、d2=2天前、d1=1天前、d0=D日
 - 指标名：profit=涨幅>7%个股数（赚钱效应）、loss=跌幅>7%个股数（亏钱效应）
 """
-from typing import List, Dict, Tuple
-import pandas as pd
-import numpy as np
 import math
+import re
+from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import List, Dict, Tuple
+
+import numpy as np
+import pandas as pd
+import math
+from data.data_cleaner import data_cleaner
+from features.base_feature import BaseFeature
 from utils.common_tools import (get_trade_dates, get_daily_kline_data,
                                 calc_limit_down_price, calc_limit_up_price,
-                                getStockRank_fortraining, getTagRank_daily)
-from data.data_cleaner import data_cleaner
-import re
+                                getStockRank_fortraining, getTagRank_daily, sort_by_recent_gain )
 from utils.log_utils import logger
-from utils.db_utils import db
-from datetime import datetime, timedelta
-from features.base_feature import BaseFeature
+from collections import defaultdict
 
 # 固定配置，第一项是距离选股日D日之前的天数。
 TIME_WEIGHT_MAP = {0: 1.0, -1: 0.8, -2: 0.6, -3: 0.4, -4: 0.2}
@@ -487,146 +489,279 @@ class SectorHeatFeature(BaseFeature):
             trade_date: str,
             top3_sectors_result: Dict,
             sector_candidate_map: Dict[str, pd.DataFrame]
-    ) -> Dict[str, int]:
+    ) -> Tuple[pd.DataFrame, Dict[str, int]]:
         """
-        【核心方法】计算30个板块强度因子（仅保留SEI维度）
-        :param trade_date: D日日期，格式yyyy-mm-dd
-        :param top3_sectors_result: select_top3_hot_sectors返回的结果，格式：{"top3_sectors": [...], "adapt_score": ...}
-        :param sector_candidate_map: 策略层传入的板块候选池，格式：{板块名: 候选个股DataFrame}
-        :return: 30个因子的字典，格式：{"sector1_d4_profit": 5, "sector1_d4_loss": 2, ...}
+        【模型训练友好版】板块热度特征计算
+        核心优化：所有缺失值按量化训练规范处理，无差别填充0，不引入虚假信号
+        :return:
+            result_df: 个股-交易日级特征DataFrame，一行=D日单只可交易个股
+            factor_dict: 兼容旧版的板块级因子字典
         """
-        # 初始化因子字典，所有因子默认0
+        # 初始化返回值
+        result_rows = []
         factor_dict = {col: 0 for col in self.factor_columns}
+        d0_date = trade_date
+        TOTAL_DAYS = 5  # d0-d4回溯期
+        RANK_DAYS = 20  # 涨跌幅排名周期
 
-        # ========== 1. 获取回溯交易日（d4-d0） ==========
+        # ========== 1. 获取交易日历 ==========
         try:
-            d_date = datetime.strptime(trade_date, "%Y-%m-%d")
-            start_date = (d_date - timedelta(days=20)).strftime("%Y-%m-%d")
-            all_trade_dates = get_trade_dates(start_date, trade_date)
-            if not all_trade_dates or len(all_trade_dates) < TOTAL_DAYS:
-                logger.error(
-                    f"[板块热度] 获取交易日失败，要求{TOTAL_DAYS}个，实际{len(all_trade_dates) if all_trade_dates else 0}个")
-                return factor_dict
-            lookback_dates = all_trade_dates[-TOTAL_DAYS:]  # 取最后5天（d4-d0）
-            day_tag_map = {f"d{4 - i}": date for i, date in enumerate(lookback_dates)}  # d4=最早，d0=trade_date
+            d_date = datetime.strptime(d0_date, "%Y-%m-%d")
+            # 1.1 d0-d4的5天回溯期
+            lookback_start_5d = (d_date - timedelta(days=20)).strftime("%Y-%m-%d")
+            all_trade_dates_5d = get_trade_dates(lookback_start_5d, d0_date)
+            if not all_trade_dates_5d or len(all_trade_dates_5d) < TOTAL_DAYS:
+                logger.error(f"[板块热度] 交易日不足{TOTAL_DAYS}个，返回空")
+                return pd.DataFrame(), factor_dict
+            lookback_dates_5d = all_trade_dates_5d[-TOTAL_DAYS:]
+            day_tag_map = {f"d{4 - i}": date for i, date in enumerate(lookback_dates_5d)}
+
+            # 1.2 20日涨跌幅所需交易日
+            lookback_start_20d = (d_date - timedelta(days=40)).strftime("%Y-%m-%d")
+            all_trade_dates_20d = get_trade_dates(lookback_start_20d, d0_date)
+            if not all_trade_dates_20d or len(all_trade_dates_20d) < RANK_DAYS:
+                logger.error(f"[板块热度] 20日涨跌幅交易日不足{RANK_DAYS}个，返回空")
+                return pd.DataFrame(), factor_dict
         except Exception as e:
             logger.error(f"[板块热度] 获取交易日异常：{str(e)}")
-            return factor_dict
+            return pd.DataFrame(), factor_dict
 
-        # ========== 2. 批量获取所有候选股的日线数据 ==========
-        # 提取所有候选股代码
+        # ========== 2. 批量预加载全量数据 ==========
+        # 2.1 提取所有候选股
         all_candidate_ts_codes = []
         for sector_df in sector_candidate_map.values():
             if not sector_df.empty:
                 all_candidate_ts_codes.extend(sector_df["ts_code"].unique().tolist())
         all_candidate_ts_codes = list(set(all_candidate_ts_codes))
         if not all_candidate_ts_codes:
-            logger.warning("[板块热度] 无候选个股数据")
-            return factor_dict
+            logger.warning("[板块热度] 无候选个股，返回空")
+            return pd.DataFrame(), factor_dict
 
-        # 批量获取5天的日线数据
+        # 2.2 批量预加载全量日线数据（5天+20天合并查询，避免重复IO）
         try:
-            all_daily_dfs = []
-            for date in lookback_dates:
+            all_daily_df = pd.DataFrame()
+            all_need_dates = list(set(lookback_dates_5d + all_trade_dates_20d[-RANK_DAYS:]))
+            for date in all_need_dates:
                 daily_df = get_daily_kline_data(trade_date=date, ts_code_list=all_candidate_ts_codes)
                 if not daily_df.empty:
-                    daily_df['trade_date'] = daily_df['trade_date'].astype(str)  # 统一格式
-                    all_daily_dfs.append(daily_df)
-            if not all_daily_dfs:
-                logger.warning("[板块热度] 无候选个股日线数据")
-                return factor_dict
-            all_daily_df = pd.concat(all_daily_dfs, ignore_index=True)
+                    daily_df['trade_date'] = daily_df['trade_date'].astype(str)
+                    all_daily_df = pd.concat([all_daily_df, daily_df], ignore_index=True)
+            if all_daily_df.empty:
+                logger.warning("[板块热度] 无日线数据，返回空")
+                return pd.DataFrame(), factor_dict
+            # 按股票+日期分组索引
+            daily_grouped = all_daily_df.groupby(["ts_code", "trade_date"]).first().to_dict(orient="index")
         except Exception as e:
-            logger.error(f"[板块热度] 获取日线数据失败：{str(e)}")
-            return factor_dict
+            logger.error(f"[板块热度] 预加载日线数据失败：{str(e)}")
+            return pd.DataFrame(), factor_dict
 
-        # ========== 3. 遍历每个板块，计算30个因子 ==========
+        # 2.3 批量预加载分钟线数据
+        minute_cache = {}
+        try:
+            for ts_code in all_candidate_ts_codes:
+                for date in lookback_dates_5d:
+                    minute_cache[(ts_code, date)] = data_cleaner.get_kline_min_by_stock_date(ts_code, date)
+        except Exception as e:
+            logger.warning(f"[板块热度] 分钟线预加载异常：{str(e)[:50]}")
+
+        # ========== 3. 遍历板块，预计算板块级通用数据 ==========
         top3_sectors = top3_sectors_result.get("top3_sectors", [])
-        # 确保top3_sectors长度为3（不足补空，保证3个板块的因子完整性）
         while len(top3_sectors) < 3:
             top3_sectors.append("")
 
+        # 预计算每个板块的：20日涨跌幅排名、SEI均值、个股近5日成交均值
+        sector_precalc_map = {}
+        for sector_idx, sector_name in enumerate(top3_sectors, 1):
+            if not sector_name or sector_name not in sector_candidate_map:
+                continue
+            sector_d0_df = sector_candidate_map[sector_name]
+            if sector_d0_df.empty:
+                continue
+            sector_ts_codes = sector_d0_df["ts_code"].unique().tolist()
+
+            # 3.1 板块内20日涨跌幅排名（用你提供的函数）
+            rank_map = {}
+            try:
+                sorted_df = sort_by_recent_gain(sector_d0_df, d0_date, day_count=20)
+                if not sorted_df.empty:
+                    sorted_df = sorted_df.copy()
+                    sorted_df["rank"] = range(1, len(sorted_df) + 1)
+                    rank_map = dict(zip(sorted_df["ts_code"], sorted_df["rank"]))
+                    # 板块排名中位数（用于填充新股）
+                    sector_rank_median = sorted_df["rank"].median()
+            except Exception as e:
+                logger.warning(f"[板块热度] {sector_name} 排名计算失败：{str(e)}")
+                rank_map = {}
+                sector_rank_median = 0
+
+            # 3.2 预计算板块内个股近5日成交均值（用于填充成交额缺失）
+            turnover_mean_map = {}
+            for ts_code in sector_ts_codes:
+                day_turnover = []
+                for date in lookback_dates_5d:
+                    key = (ts_code, date)
+                    if key in daily_grouped:
+                        day_turnover.append(daily_grouped[key].get("turnover_rate", 0))
+                turnover_mean_map[ts_code] = np.mean(day_turnover) if day_turnover else 0
+
+            # 3.3 存入预计算字典
+            sector_precalc_map[sector_name] = {
+                "rank_map": rank_map,
+                "rank_median": sector_rank_median,
+                "turnover_mean_map": turnover_mean_map,
+                "ts_codes": sector_ts_codes
+            }
+
+        # ========== 4. 遍历板块，计算因子 ==========
         for sector_idx, sector_name in enumerate(top3_sectors, 1):
             sector_prefix = f"sector{sector_idx}"
-            # 跳过空板块/无候选池的板块
-            if not sector_name or sector_name not in sector_candidate_map:
-                logger.warning(f"[板块热度] 板块{sector_idx}（{sector_name}）无候选池数据")
+            if not sector_name or sector_name not in sector_precalc_map:
                 continue
-
-            # 获取该板块候选股 & 筛选日线数据
-            sector_df = sector_candidate_map[sector_name]
-            sector_ts_codes = sector_df["ts_code"].unique().tolist()
-            sector_daily_df = all_daily_df[all_daily_df["ts_code"].isin(sector_ts_codes)].copy()
-            if sector_daily_df.empty:
-                logger.warning(f"[板块热度] 板块{sector_idx}（{sector_name}）无日线数据")
+            sector_precalc = sector_precalc_map[sector_name]
+            sector_d0_df = sector_candidate_map[sector_name]
+            if sector_d0_df.empty:
                 continue
+            logger.info(f"[板块热度] 板块{sector_idx}({sector_name})候选股数：{len(sector_d0_df)}")
 
-            # ========== 4. 遍历每个时间维度（d4-d0） ==========
+            # ========== 4.1 预计算该板块d0-d4的板块级因子 ==========
+            sector_day_factor_map = {}
+            # 预计算每日同涨跌个股的SEI均值（用于填充SEI缺失）
+            day_sei_mean_map = defaultdict(dict)  # {day_tag: {"up": 均值, "down": 均值}}
+
             for day_tag, target_date in day_tag_map.items():
-                # 筛选该交易日的板块数据
-                target_df = sector_daily_df[sector_daily_df["trade_date"] == target_date].copy()
-                if target_df.empty:
-                    logger.debug(f"[板块热度] 板块{sector_idx} {day_tag}（{target_date}）无数据")
+                day_profit_sei = []
+                day_loss_sei = []
+                day_up_sei = []
+                day_down_sei = []
+
+                for ts_code in sector_precalc["ts_codes"]:
+                    daily_key = (ts_code, target_date)
+                    if daily_key not in daily_grouped:
+                        continue
+                    daily_row = daily_grouped[daily_key]
+                    pct_chg = daily_row["pct_chg"]
+                    pre_close = daily_row["pre_close"]
+
+                    # 计算SEI
+                    minute_df = minute_cache.get(daily_key, pd.DataFrame())
+                    up_limit = calc_limit_up_price(ts_code, pre_close)
+                    down_limit = calc_limit_down_price(ts_code, pre_close)
+                    sei_score = np.clip(self._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit), 0, 100)
+
+                    # 分类统计
+                    if pct_chg > 1e-6:
+                        day_profit_sei.append(sei_score)
+                        day_up_sei.append(sei_score)
+                    elif pct_chg < -1e-6:
+                        day_loss_sei.append(sei_score)
+                        day_down_sei.append(sei_score)
+
+                # 计算板块级因子
+                sector_profit = round(np.mean(day_profit_sei), 2) if day_profit_sei else 50.0
+                avg_loss_sei = round(np.mean(day_loss_sei), 2) if day_loss_sei else 50.0
+                sector_loss = round(100 - avg_loss_sei, 2)
+                sector_day_factor_map[day_tag] = {"profit": sector_profit, "loss": sector_loss}
+                # 填充兼容字典
+                factor_dict[f"{sector_prefix}_{day_tag}_profit"] = int(sector_profit)
+                factor_dict[f"{sector_prefix}_{day_tag}_loss"] = int(sector_loss)
+                # 保存当日同涨跌SEI均值
+                day_sei_mean_map[day_tag]["up"] = np.mean(day_up_sei) if day_up_sei else 50.0
+                day_sei_mean_map[day_tag]["down"] = np.mean(day_down_sei) if day_down_sei else 50.0
+
+            # ========== 4.2 遍历个股，生成单条样本 ==========
+            for _, d0_row in sector_d0_df.iterrows():
+                ts_code = d0_row["ts_code"]
+                # 【核心过滤1】D日无基础数据的个股，直接剔除，不进入训练集
+                d0_key = (ts_code, d0_date)
+                if d0_key not in daily_grouped:
+                    logger.warning(f"[板块热度] {ts_code} {d0_date} 无基础日线数据，剔除样本")
                     continue
 
-                # ==================== 计算Profit（上涨个股平均SEI） ====================
-                profit_df = target_df[target_df["pct_chg"] > 0].copy()
-                profit_sei_scores = []
-                if not profit_df.empty:
-                    for _, row in profit_df.iterrows():
-                        ts_code = row["ts_code"]
-                        pre_close = row["pre_close"]
-                        # 获取分钟线数据（仅用于计算SEI，无分钟线则SEI为0）
-                        try:
-                            minute_df = data_cleaner.get_kline_min_by_stock_date(ts_code, target_date)
-                        except Exception as e:
-                            logger.debug(f"[板块热度] 个股{ts_code} {target_date} 分钟线获取失败：{str(e)}")
-                            minute_df = pd.DataFrame()
+                # 初始化行数据
+                row_data = {
+                    "stock_code": ts_code,
+                    "trade_date": d0_date,
+                    "sector_id": sector_idx,
+                    "sector_name": sector_name,
+                    # 20日涨跌幅排名：无数据用板块中位数填充，不用0
+                    "stock_sector_20d_rank": sector_precalc["rank_map"].get(ts_code, sector_precalc["rank_median"])
+                }
 
-                        # 计算SEI得分（核心：仅保留SEI维度）
+                # 【核心】遍历d0-d4，补全所有因子
+                valid_sample = True  # 标记样本是否有效
+                for day_tag, target_date in day_tag_map.items():
+                    daily_key = (ts_code, target_date)
+                    daily_data = daily_grouped.get(daily_key, None)
+
+                    # 1. 补全OHLC、涨跌幅、成交额、换手率
+                    if daily_data is not None:
+                        row_data[f"stock_open_{day_tag}"] = daily_data["open"]
+                        row_data[f"stock_high_{day_tag}"] = daily_data["high"]
+                        row_data[f"stock_low_{day_tag}"] = daily_data["low"]
+                        row_data[f"stock_close_{day_tag}"] = daily_data["close"]
+                        row_data[f"stock_pct_chg_{day_tag}"] = daily_data["pct_chg"]
+                        row_data[f"stock_amount_{day_tag}"] = daily_data["amount"]
+                        # 换手率：无数据用个股近5日均值填充，不用0
+                        # row_data[f"stock_turnover_{day_tag}"] = daily_data.get("turnover_rate",
+                        #                                                        sector_precalc["turnover_mean_map"].get(
+                        #                                                            ts_code, 0))
+                    else:
+                        # 【核心处理】回溯期某天停牌无数据，用D日数据填充，不用0
+                        d0_data = daily_grouped[d0_key]
+                        row_data[f"stock_open_{day_tag}"] = d0_data["open"]
+                        row_data[f"stock_high_{day_tag}"] = d0_data["high"]
+                        row_data[f"stock_low_{day_tag}"] = d0_data["low"]
+                        row_data[f"stock_close_{day_tag}"] = d0_data["close"]
+                        row_data[f"stock_pct_chg_{day_tag}"] = 0.0
+                        row_data[f"stock_amount_{day_tag}"] = 0.0
+                        # row_data[f"stock_turnover_{day_tag}"] = sector_precalc["turnover_mean_map"].get(ts_code, 0)
+
+                    # 2. 补全个股profit/loss因子
+                    if daily_data is not None:
+                        pct_chg = daily_data["pct_chg"]
+                        pre_close = daily_data["pre_close"]
+                        minute_df = minute_cache.get(daily_key, pd.DataFrame())
                         up_limit = calc_limit_up_price(ts_code, pre_close)
                         down_limit = calc_limit_down_price(ts_code, pre_close)
-                        sei_score = self._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
+                        sei_score = np.clip(self._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit), 0,
+                                            100)
 
-                        # 过滤异常SEI值（确保0-100）
-                        if 0 <= sei_score <= 100:
-                            profit_sei_scores.append(sei_score)
+                        # SEI缺失：用当日同板块同涨跌个股的均值填充，不用0
+                        if sei_score <= 0 and minute_df.empty:
+                            if pct_chg > 1e-6:
+                                sei_score = day_sei_mean_map[day_tag]["up"]
+                            elif pct_chg < -1e-6:
+                                sei_score = day_sei_mean_map[day_tag]["down"]
+                            else:
+                                sei_score = 50.0
 
-                # 板块Profit = 上涨个股SEI的平均值（无数据则为0）
-                sector_profit = round(sum(profit_sei_scores) / len(profit_sei_scores), 2) if profit_sei_scores else 0.0
-                # 填充因子字典（转int，符合输出约定）
-                factor_dict[f"{sector_prefix}_{day_tag}_profit"] = int(sector_profit)
+                        # 按涨跌赋值profit/loss
+                        if pct_chg > 1e-6:
+                            row_data[f"stock_profit_{day_tag}"] = sei_score
+                            row_data[f"stock_loss_{day_tag}"] = 0.0
+                        elif pct_chg < -1e-6:
+                            row_data[f"stock_profit_{day_tag}"] = 0.0
+                            row_data[f"stock_loss_{day_tag}"] = 100 - sei_score
+                        else:
+                            row_data[f"stock_profit_{day_tag}"] = 0.0
+                            row_data[f"stock_loss_{day_tag}"] = 0.0
+                    else:
+                        # 回溯期停牌：profit/loss填充中性值50，不用0
+                        row_data[f"stock_profit_{day_tag}"] = 50.0
+                        row_data[f"stock_loss_{day_tag}"] = 50.0
 
-                # ==================== 计算Loss（100 - 下跌个股平均SEI） ====================
-                loss_df = target_df[target_df["pct_chg"] < 0].copy()
-                loss_sei_scores = []
-                if not loss_df.empty:
-                    for _, row in loss_df.iterrows():
-                        ts_code = row["ts_code"]
-                        pre_close = row["pre_close"]
-                        # 获取分钟线数据（仅用于计算SEI）
-                        try:
-                            minute_df = data_cleaner.get_kline_min_by_stock_date(ts_code, target_date)
-                        except Exception as e:
-                            logger.debug(f"[板块热度] 个股{ts_code} {target_date} 分钟线获取失败：{str(e)}")
-                            minute_df = pd.DataFrame()
+                    # 3. 补全板块平均profit/loss因子
+                    row_data[f"sector_avg_profit_{day_tag}"] = sector_day_factor_map[day_tag]["profit"]
+                    row_data[f"sector_avg_loss_{day_tag}"] = sector_day_factor_map[day_tag]["loss"]
 
-                        # 计算SEI得分
-                        up_limit = calc_limit_up_price(ts_code, pre_close)
-                        down_limit = calc_limit_down_price(ts_code, pre_close)
-                        sei_score = self._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
+                # 有效样本加入结果
+                if valid_sample:
+                    result_rows.append(row_data)
 
-                        # 过滤异常SEI值
-                        if 0 <= sei_score <= 100:
-                            loss_sei_scores.append(sei_score)
-
-                avg_loss_sei = round(sum(loss_sei_scores) / len(loss_sei_scores), 2) if loss_sei_scores else 50
-                sector_loss = round(100 - avg_loss_sei, 2)
-                # 填充因子字典（转int，符合输出约定）
-                factor_dict[f"{sector_prefix}_{day_tag}_loss"] = int(sector_loss)
-
-        logger.info(f"[板块热度] 30个因子计算完成（仅SEI维度）：{factor_dict}")
-        return factor_dict
+        # ========== 生成最终结果 ==========
+        result_df = pd.DataFrame(result_rows)
+        logger.info(f"[板块热度] D日{d0_date}特征计算完成，有效样本数：{len(result_df)}行")
+        return result_df, factor_dict
 
 
     def select_top3_hot_sectors(self, trade_date: str) -> Dict:
@@ -893,47 +1028,47 @@ class SectorHeatFeature(BaseFeature):
         return {"top3_sectors": final_top3, "adapt_score": adapt_score}
 
 if __name__ == "__main__":
-        # callable= SectorHeatFeature()
-        # # tag = callable._gen_factor_columns()
+        callable= SectorHeatFeature()
+        # tag = callable._gen_factor_columns()
         # #获取目标
-        # top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-05")
-        # print(top3_sector)
-            # ========== 手动修改测试参数即可 ==========
-            TEST_TS_CODE = "002440.SZ"  # 测试个股代码600759.SH   300189.sz     300164.SZ
-            TEST_TRADE_DATE = "2026-02-26"  # 测试日期（yyyy-mm-dd）
-            # ========================================
-
-            # 初始化实例
-            sector_feature = SectorHeatFeature()
-
-            # 获取测试所需基础数据
-            daily_df = get_daily_kline_data(trade_date=TEST_TRADE_DATE, ts_code_list=[TEST_TS_CODE])
-            minute_df = data_cleaner.get_kline_min_by_stock_date(TEST_TS_CODE, TEST_TRADE_DATE)
-
-            # 数据校验
-            if daily_df.empty:
-                print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的日线数据")
-                exit()
-            if minute_df.empty:
-                print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的分钟线数据")
-                exit()
-
-            # 提取基础参数
-            stock_row = daily_df.iloc[0]
-            pre_close = stock_row["pre_close"]
-            up_limit = calc_limit_up_price(TEST_TS_CODE, pre_close)
-            down_limit = calc_limit_down_price(TEST_TS_CODE, pre_close)
-
-            sei_score = sector_feature._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
-            boost_score, boost_pct, boost_time = sector_feature._calculate_minute_boost_score(minute_df)
-
-            # 直接输出结果
-            print("=" * 60)
-            print(f"测试标的：{TEST_TS_CODE} | 测试日期：{TEST_TRADE_DATE}")
-            print("-" * 60)
-            print(f"2. 分钟线SEI情绪指数：{sei_score:.2f}")
-            print("-" * 60)
-            print(f"3. 分钟线拉升得分：{boost_score:.2f}")
-            print(f"   最大5分钟涨幅：{boost_pct:.2f}%")
-            print(f"   对应拉升时间：{boost_time}")
-            print("=" * 60)
+        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-02-04")
+        print(top3_sector)
+        #     # ========== 手动修改测试参数即可 ==========
+        #     TEST_TS_CODE = "002015.SZ"  # 测试个股代码600759.SH   300189.sz     300164.SZ
+        #     TEST_TRADE_DATE = "2026-03-03"  # 测试日期（yyyy-mm-dd）
+        #     # ========================================
+        #
+        #     # 初始化实例
+        #     sector_feature = SectorHeatFeature()
+        #
+        #     # 获取测试所需基础数据
+        #     daily_df = get_daily_kline_data(trade_date=TEST_TRADE_DATE, ts_code_list=[TEST_TS_CODE])
+        #     minute_df = data_cleaner.get_kline_min_by_stock_date(TEST_TS_CODE, TEST_TRADE_DATE)
+        #
+        #     # 数据校验
+        #     if daily_df.empty:
+        #         print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的日线数据")
+        #         exit()
+        #     if minute_df.empty:
+        #         print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的分钟线数据")
+        #         exit()
+        #
+        #     # 提取基础参数
+        #     stock_row = daily_df.iloc[0]
+        #     pre_close = stock_row["pre_close"]
+        #     up_limit = calc_limit_up_price(TEST_TS_CODE, pre_close)
+        #     down_limit = calc_limit_down_price(TEST_TS_CODE, pre_close)
+        #
+        #     sei_score = sector_feature._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
+        #     boost_score, boost_pct, boost_time = sector_feature._calculate_minute_boost_score(minute_df)
+        #
+        #     # 直接输出结果
+        #     print("=" * 60)
+        #     print(f"测试标的：{TEST_TS_CODE} | 测试日期：{TEST_TRADE_DATE}")
+        #     print("-" * 60)
+        #     print(f"2. 分钟线SEI情绪指数：{sei_score:.2f}")
+        #     print("-" * 60)
+        #     print(f"3. 分钟线拉升得分：{boost_score:.2f}")
+        #     print(f"   最大5分钟涨幅：{boost_pct:.2f}%")
+        #     print(f"   对应拉升时间：{boost_time}")
+        #     print("=" * 60)
