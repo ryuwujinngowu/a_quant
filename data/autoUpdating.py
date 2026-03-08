@@ -21,9 +21,7 @@ import datetime
 import logging
 from pathlib import Path
 
-# -------------------------- 解决服务器路径问题 --------------------------
-# 动态获取当前脚本所在目录的父目录（项目根目录），并加入系统路径
-# 无论在哪个目录下启动此脚本，都能正确导入 data, utils 等模块
+
 project_root = Path(__file__).resolve().parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
