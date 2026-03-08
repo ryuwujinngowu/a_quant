@@ -2,14 +2,14 @@ import requests
 import json
 
 
-def send_wechat_message(token, title, content):
+def send_wechat_message(title, content):
     """
     通过PushPlus向微信发送消息
-    :param token: PushPlus的token
     :param title: 消息标题（必填）
     :param content: 消息内容
     :return: 推送结果（True/False）
     """
+    token = "028a3ef4df0a41aabb85320660a65bfe"
     # PushPlus的核心API地址
     url = "http://www.pushplus.plus/send"
     # 构造推送参数
@@ -42,7 +42,7 @@ def send_wechat_message(token, title, content):
 
 # 主程序：模拟Python程序输出并推送
 if __name__ == "__main__":
-    YOUR_PUSHPLUS_TOKEN = "028a3ef4df0a41aabb85320660a65bfe"
+
 
     # 模拟Python程序的输出内容（替换成你实际的程序输出即可）
     program_output = """
@@ -93,7 +93,6 @@ if __name__ == "__main__":
 
     # 调用推送函数
     send_wechat_message(
-        token=YOUR_PUSHPLUS_TOKEN,
         title="Python程序运行报告",  # 消息标题
         content=program_output  # 程序输出内容
     )
