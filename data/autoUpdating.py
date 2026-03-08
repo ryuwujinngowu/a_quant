@@ -15,16 +15,11 @@
 - 终止条件：所有数据更新成功后，自动进入下一个交易日的等待
 =====================================================================
 """
-import sys
 import time
 import datetime
+import sys
 import os
-from pathlib import Path
-
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from data_cleaner import DataCleaner
 from data_fetcher import data_fetcher

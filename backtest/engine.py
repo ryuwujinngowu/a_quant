@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import pandas as pd
 from config.config import MAX_POSITION_COUNT
 from utils.common_tools import get_trade_dates, get_daily_kline_data
