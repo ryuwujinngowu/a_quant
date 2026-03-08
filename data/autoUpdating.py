@@ -26,8 +26,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from data.data_cleaner import DataCleaner
-from data.data_fetcher import data_fetcher
+from data_cleaner import DataCleaner
+from data_fetcher import data_fetcher
 from utils.common_tools import (
     read_last_update_record,
     write_update_record,
