@@ -41,7 +41,8 @@ cleaner = DataCleaner()
 START_HOUR = 15  # 每日开始尝试运行的时间 (小时)
 START_MINUTE = 30  # 每日开始尝试运行的时间 (分钟) 【新增】
 RETRY_INTERVAL = 1800  # 重试间隔 (秒)，1800秒 = 30分钟
-
+MAX_RETRY_TIMES = 10  # 【新增】单日最大重试次数（8次=5小时，避免无限重试）
+RETRY_COUNT = 0  # 【新增】重试计数器
 
 # -------------------------- 核心更新函数 (新增影响行数返回值) --------------------------
 def update_stock_basic():
@@ -78,6 +79,7 @@ def update_stock_st_incremental(start_date: str, end_date: str):
 def update_kline_day_incremental(date_list: list):
     """增量更新日线数据（按日期列表）- 批量请求优化版"""
     if not date_list:
+        logger.warning(f"kline_day更新：日期列表为空（{date_list}），跳过更新")  # 【修复】增加空列表日志
         return False, 0  # 【修改】返回(执行成功标识, 影响行数)
 
     logger.info(f"===== 增量更新日线数据（{len(date_list)}天） =====")
@@ -163,7 +165,7 @@ def update_index_daily(last_date):
         return False, 0
 
 
-# -------------------------- 主执行流程 (新增影响行数校验) --------------------------
+# -------------------------- 主执行流程 (核心修复：仅成功时更新记录) --------------------------
 def startUpdating():
     """
     执行主更新流程
@@ -171,14 +173,15 @@ def startUpdating():
     """
     logger.info("===== 启动增量更新脚本 =====")
 
-    # 1. 读取上次更新记录
+    # 1. 读取上次更新记录（核心：失败时保留原记录）
     last_record = read_last_update_record()
     last_date = last_record["last_update_date"]
     logger.info(f"===== 上次更新时间：{last_date} =====")
     current_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    # 2. 计算增量日期
+    # 2. 计算增量日期（基于原始last_date，未被篡改）
     inc_dates = calc_incremental_date_range(last_date, current_date)
+    logger.info(f"===== 计算增量日期范围：{last_date} ~ {current_date}，增量日期列表：{inc_dates} =====")
 
     # 3. 执行更新
     updated_tables = []
@@ -198,31 +201,33 @@ def startUpdating():
     success_flags['index'], affected_rows_dict['index'] = update_index_daily(last_date)
     if success_flags['index']: updated_tables.append("index_daily")
 
-    # 4. 【核心修改】计算总影响行数，判断是否真的更新成功
+    # 4. 核心判定：只有核心表成功+有实际行数，才算更新成功
     total_affected_rows = sum(affected_rows_dict.values())
     logger.info(f"本次更新各表影响行数：{affected_rows_dict}，总影响行数：{total_affected_rows}")
 
-    # 判定标准：
-    # - 核心表 (stock_basic, kline_day) 执行成功
-    # - 总影响行数 > 0（排除接口数据未更新导致的0行影响）
-    core_success = success_flags['stock_basic'] and success_flags['kline']
+    # 判定标准：核心表(stock_basic)成功 + (kline成功 或 总行数>0) + 总行数>0
+    core_success = success_flags['stock_basic'] and (success_flags['kline'] or total_affected_rows > 0)
     has_actual_update = total_affected_rows > 0
     is_success = core_success and has_actual_update
 
-    # 5. 记录本次更新
-    write_update_record(current_date, updated_tables)
-    logger.info(f"===== 本次更新时间：{current_date} =====")
-    logger.info(f"===== 更新完成 | 本次更新表：{updated_tables} | 总影响行数：{total_affected_rows} =====")
+    # 5. 【终极修复】仅当更新成功时，才写入更新记录！！！
+    if is_success:
+        write_update_record(current_date, updated_tables)
+        logger.info(f"===== 本次更新成功，更新记录时间为：{current_date} =====")
+    else:
+        logger.warning(f"===== 本次更新失败，不修改记录！上次更新时间仍为：{last_date} =====")
 
-    # 构造返回消息（新增影响行数信息）
+    # 6. 构造返回消息
     msg_content = (
         f"更新日期: {current_date}\n"
         f"更新表: {updated_tables}\n"
         f"各表影响行数: {affected_rows_dict}\n"
         f"总影响行数: {total_affected_rows}\n"
-        f"状态: {'成功' if is_success else '部分失败/无有效数据更新'}"
+        f"状态: {'成功' if is_success else '部分失败/无有效数据更新'}\n"
+        f"记录更新状态: {'已更新为'+current_date if is_success else '保留原时间'+last_date}"
     )
 
+    logger.info(f"===== 更新完成 | 本次更新表：{updated_tables} | 总影响行数：{total_affected_rows} | 成功标识：{is_success} =====")
     return is_success, msg_content
 
 
@@ -251,9 +256,11 @@ def wait_until_target_time(target_hour, target_minute):
 
     if now >= target_time:
         # 如果现在已经过了目标时间，不需要等待，直接开始
+        logger.info(f"当前时间 {now.strftime('%H:%M:%S')} 已过目标时间 {target_time.strftime('%H:%M:%S')}，直接执行")
         return
 
     wait_seconds = (target_time - now).total_seconds()
+    logger.info(f"等待至目标时间 {target_time.strftime('%H:%M:%S')}，需等待 {wait_seconds/60:.1f} 分钟")
     time.sleep(wait_seconds)
 
 
@@ -262,12 +269,17 @@ def run_server():
     服务端常驻主循环
     """
     logger.info("量化数据更新服务已启动...")
+    global RETRY_COUNT  # 【新增】声明使用全局重试计数器
 
     last_run_date = None  # 记录上一次成功运行的日期
 
     while True:
         now = datetime.datetime.now()
         today_str = now.strftime("%Y-%m-%d")
+
+        # 重置当日重试计数器
+        if last_run_date != today_str:
+            RETRY_COUNT = 0  # 【新增】每日重置重试次数
 
         # 1. 检查今天是否已经成功运行过了
         if last_run_date == today_str:
@@ -276,6 +288,7 @@ def run_server():
             tomorrow = now + datetime.timedelta(days=1)
             tomorrow_start = tomorrow.replace(hour=2, minute=0, second=0)
             sleep_secs = (tomorrow_start - now).total_seconds()
+            logger.info(f"休眠 {sleep_secs/3600:.1f} 小时至次日凌晨2点")
             time.sleep(sleep_secs)
             continue
 
@@ -289,34 +302,50 @@ def run_server():
         # 3. 是交易日，等待到 15:30 【修改】传入小时+分钟参数
         wait_until_target_time(START_HOUR, START_MINUTE)
 
-        # 4. 开始循环尝试更新，直到成功
+        # 4. 开始循环尝试更新，直到成功或达到最大重试次数
         update_success = False
-        while not update_success:
+        while not update_success and RETRY_COUNT < MAX_RETRY_TIMES:
+            RETRY_COUNT += 1  # 【新增】重试次数+1
             current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            logger.info(f"开始尝试数据更新: {current_time_str}")
+            # 新增：打印上次记录时间，方便排查
+            last_record = read_last_update_record()
+            logger.info(f"===== 开始第 {RETRY_COUNT} 次重试 更新数据: {current_time_str} | 上次记录时间：{last_record['last_update_date']} =====")
 
             try:
                 update_success, msg = startUpdating()
 
                 if update_success:
                     logger.info("数据更新全部成功！（有实际行数影响）")
-                    # 发送微信推送
+                    # 发送微信推送（完全隔离异常）
                     try:
                         send_wechat_message(f"【量化数据更新成功】{today_str}", msg)
                         logger.info("微信推送已发送。")
                     except Exception as push_e:
-                        logger.error(f"微信推送发送失败: {push_e}")
+                        logger.error(f"微信推送发送失败: {push_e}", exc_info=True)
 
                     last_run_date = today_str  # 标记今日已完成
                 else:
-                    logger.warning(f"更新未完全成功/无有效数据更新，{RETRY_INTERVAL / 60}分钟后重试...")
-                    # 发送失败告警（可选，根据需要开启）
-                    # send_wechat_message(f"【量化数据更新异常】{today_str}", msg)
+                    logger.warning(f"第 {RETRY_COUNT} 次更新未完全成功/无有效数据更新，{RETRY_INTERVAL / 60}分钟后重试...")
+                    # 发送失败告警（可选）
+                    try:
+                        send_wechat_message(f"【量化数据更新异常】{today_str} 第{RETRY_COUNT}次重试", msg)
+                    except Exception as push_e:
+                        logger.error(f"失败告警推送失败: {push_e}", exc_info=True)
                     time.sleep(RETRY_INTERVAL)
 
             except Exception as e:
-                logger.error(f"主循环发生严重异常: {e}", exc_info=True)
+                logger.error(f"第 {RETRY_COUNT} 次重试 主循环发生严重异常: {e}", exc_info=True)
                 time.sleep(RETRY_INTERVAL)
+
+        # 达到最大重试次数处理
+        if RETRY_COUNT >= MAX_RETRY_TIMES and not update_success:
+            logger.error(f"今日 [{today_str}] 已达到最大重试次数 ({MAX_RETRY_TIMES}次)，停止重试")
+            try:
+                send_wechat_message(f"【量化数据更新失败】{today_str}", f"今日已重试{MAX_RETRY_TIMES}次仍未成功，请手动处理！")
+            except Exception as push_e:
+                logger.error(f"最大重试次数告警推送失败: {push_e}", exc_info=True)
+            # 标记今日已处理（避免无限循环）
+            last_run_date = today_str
 
 
 if __name__ == "__main__":
