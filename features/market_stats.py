@@ -68,7 +68,6 @@ class SectorHeatFeature(BaseFeature):
 
         if minute_df.empty:
             return 50, {}
-
         minute_df = minute_df.sort_values("time")
 
         close_arr = minute_df["close"].values
@@ -804,40 +803,39 @@ class SectorHeatFeature(BaseFeature):
         return {"top3_sectors": final_top3, "adapt_score": adapt_score}
 
 if __name__ == "__main__":
-        callable= SectorHeatFeature()
-        # tag = callable._gen_factor_columns()
-        # #获取目标
-        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-09")
-        print(top3_sector)
-        #     # ========== 手动修改测试参数即可 ==========
-        #     TEST_TS_CODE = "002015.SZ"  # 测试个股代码600759.SH   300189.sz     300164.SZ
-        #     TEST_TRADE_DATE = "2026-03-03"  # 测试日期（yyyy-mm-dd）
-        #     # ========================================
-        #
-        #     # 初始化实例
-        #     sector_feature = SectorHeatFeature()
-        #
-        #     # 获取测试所需基础数据
-        #     daily_df = get_daily_kline_data(trade_date=TEST_TRADE_DATE, ts_code_list=[TEST_TS_CODE])
-        #     minute_df = data_cleaner.get_kline_min_by_stock_date(TEST_TS_CODE, TEST_TRADE_DATE)
-        #
-        #     # 数据校验
-        #     if daily_df.empty:
-        #         print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的日线数据")
-        #         exit()
-        #     if minute_df.empty:
-        #         print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的分钟线数据")
-        #         exit()
-        #
-        #     # 提取基础参数
-        #     stock_row = daily_df.iloc[0]
-        #     pre_close = stock_row["pre_close"]
-        #     up_limit = calc_limit_up_price(TEST_TS_CODE, pre_close)
-        #     down_limit = calc_limit_down_price(TEST_TS_CODE, pre_close)
-        #
-        #     sei_score = sector_feature._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
-        #     boost_score, boost_pct, boost_time = sector_feature._calculate_minute_boost_score(minute_df)
-        #
-        #     # 直接输出结果
-        #     print("=" * 60)
+        # callable= SectorHeatFeature()
+        # # tag = callable._gen_factor_columns()
+        # # #获取目标
+        # top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-09")
+        # print(top3_sector)
+            # ========== 手动修改测试参数即可 ==========
+            TEST_TS_CODE = "002015.SZ"  # 测试个股代码600759.SH   300189.sz     300164.SZ
+            TEST_TRADE_DATE = "2026-03-03"  # 测试日期（yyyy-mm-dd）
+            # ========================================
+
+            # 初始化实例
+            sector_feature = SectorHeatFeature()
+
+            # 获取测试所需基础数据
+            daily_df = get_daily_kline_data(trade_date=TEST_TRADE_DATE, ts_code_list=[TEST_TS_CODE])
+            minute_df = data_cleaner.get_kline_min_by_stock_date(TEST_TS_CODE, TEST_TRADE_DATE)
+
+            # 数据校验
+            if daily_df.empty:
+                print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的日线数据")
+                exit()
+            if minute_df.empty:
+                print(f"错误：未获取到{TEST_TS_CODE}在{TEST_TRADE_DATE}的分钟线数据")
+                exit()
+
+            # 提取基础参数
+            stock_row = daily_df.iloc[0]
+            pre_close = stock_row["pre_close"]
+            up_limit = calc_limit_up_price(TEST_TS_CODE, pre_close)
+            down_limit = calc_limit_down_price(TEST_TS_CODE, pre_close)
+
+            sei_score = sector_feature._calculate_minute_sei(minute_df, pre_close, up_limit, down_limit)
+            print(sei_score)
+
+            # 直接输出结果
 

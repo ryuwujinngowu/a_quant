@@ -206,8 +206,8 @@ def startUpdating():
     logger.info(f"本次更新各表影响行数：{affected_rows_dict}，总影响行数：{total_affected_rows}")
 
     # 判定标准：核心表(stock_basic)成功 + (kline成功 或 总行数>0) + 总行数>0
-    core_success = success_flags['stock_basic'] and (success_flags['kline'] or total_affected_rows > 0)
-    has_actual_update = total_affected_rows > 0
+    core_success = success_flags['stock_basic'] and (success_flags['kline'] and total_affected_rows > 0)
+    has_actual_update = total_affected_rows > 50
     is_success = core_success and has_actual_update
 
     # 5. 【终极修复】仅当更新成功时，才写入更新记录！！！
