@@ -352,8 +352,11 @@ class SectorHeatStrategy(BaseStrategy):
                     day_count=10
                 )
                 # 保留近10日有涨停的股票
+
                 keep_ts_codes = [ts_code for ts_code, has_limit_up in has_limit_up_map.items() if has_limit_up]
                 filtered_df = sector_daily_df[sector_daily_df["ts_code"].isin(keep_ts_codes)]
+                print(filtered_df)
+                breakpoint()
                 # filtered_df = sort_by_recent_gain(filtered_df, trade_date, day_count=20)  #对20日涨幅进行排序。
                 sector_candidate_map[sector] = filtered_df
             except Exception as e:

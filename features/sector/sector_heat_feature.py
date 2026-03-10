@@ -16,6 +16,7 @@ from features.feature_registry import feature_registry
 from utils.common_tools import (
     get_trade_dates, getStockRank_fortraining, getTagRank_daily, sort_by_recent_gain
 )
+from utils.log_utils import logger
 
 
 # 固定配置
@@ -58,7 +59,7 @@ class SectorHeatFeature(BaseFeature):
         """
         # 基础格式校验
         if not re.match(r'^\d{4}-\d{2}-\d{2}$', trade_date):
-            self.logger.error(f"[板块热度] 日期格式错误：{trade_date}，要求yyyy-mm-dd")
+            logger.error(f"[板块热度] 日期格式错误：{trade_date}，要求yyyy-mm-dd")
             return {"top3_sectors": [], "adapt_score": 0}
 
         # 获取5个连续交易日
@@ -68,10 +69,10 @@ class SectorHeatFeature(BaseFeature):
             all_trade_dates = get_trade_dates(start_date, trade_date)
             trade_dates = all_trade_dates[-TOTAL_DAYS:]
             if len(trade_dates) != TOTAL_DAYS:
-                self.logger.error(f"[板块热度] 获取交易日失败，仅拿到{len(trade_dates)}个，要求5个")
+                logger.error(f"[板块热度] 获取交易日失败，仅拿到{len(trade_dates)}个，要求5个")
                 return {"top3_sectors": [], "adapt_score": 0}
         except Exception as e:
-            self.logger.error(f"[板块热度] 获取交易日异常：{str(e)}")
+            logger.error(f"[板块热度] 获取交易日异常：{str(e)}")
             return {"top3_sectors": [], "adapt_score": 0}
 
         # 逐天生成板块榜单
@@ -83,13 +84,13 @@ class SectorHeatFeature(BaseFeature):
             try:
                 stock_df = getStockRank_fortraining(day)
                 if stock_df.empty or "ts_code" not in stock_df.columns:
-                    self.logger.warning(f"[板块热度] {day} 无符合条件的股票，跳过")
+                    logger.warning(f"[板块热度] {day} 无符合条件的股票，跳过")
                     continue
                 ts_list = stock_df["ts_code"].dropna().unique().tolist()
 
                 tag_df = getTagRank_daily(ts_list)
                 if tag_df.empty or "concept_name" not in tag_df.columns:
-                    self.logger.warning(f"[板块热度] {day} 无板块数据，跳过")
+                    logger.warning(f"[板块热度] {day} 无板块数据，跳过")
                     continue
                 tag_df = tag_df.head(5).reset_index(drop=True)
 
@@ -98,12 +99,12 @@ class SectorHeatFeature(BaseFeature):
                 all_daily_sectors.append(set([item["name"] for item in daily_board]))
                 daily_rank_maps.append({item["name"]: item["rank"] for item in daily_board})
             except Exception as e:
-                self.logger.warning(f"[板块热度] {day} 数据处理失败：{str(e)}，跳过")
+                logger.warning(f"[板块热度] {day} 数据处理失败：{str(e)}，跳过")
                 continue
 
         # 最低有效数据校验
         if len(daily_board_data) < 3:
-            self.logger.error(f"[板块热度] 有效交易日不足3个，无法计算")
+            logger.error(f"[板块热度] 有效交易日不足3个，无法计算")
             return {"top3_sectors": [], "adapt_score": 0}
 
         # 板块热度统计
@@ -127,7 +128,7 @@ class SectorHeatFeature(BaseFeature):
                 sector_stats[name]["total_score"] += (6 - rank) * time_weight
 
         if not sector_stats:
-            self.logger.error(f"[板块热度] 无有效板块统计数据")
+            logger.error(f"[板块热度] 无有效板块统计数据")
             return {"top3_sectors": [], "adapt_score": 0}
 
         # 规则1：选取2个核心题材
@@ -260,38 +261,32 @@ class SectorHeatFeature(BaseFeature):
                 adapt_score = round(base_score * final_coeff)
                 adapt_score = max(0, min(100, adapt_score))
             except Exception as e:
-                self.logger.warning(f"[板块热度] 轮动分计算失败：{str(e)}，置为0")
+                logger.warning(f"[板块热度] 轮动分计算失败：{str(e)}，置为0")
                 adapt_score = 0
 
-        self.logger.info(f"[板块热度] 计算完成 | 基准日：{trade_date} | 轮动分：{adapt_score} | 最终TOP3：{final_top3}")
+        logger.info(f"[板块热度] 计算完成 | 基准日：{trade_date} | 轮动分：{adapt_score} | 最终TOP3：{final_top3}")
         return {"top3_sectors": final_top3, "adapt_score": adapt_score}
 
-    def calculate(self, data_bundle: "FeatureDataBundle") -> tuple[pd.DataFrame, dict]:
+    def calculate(self, data_bundle, **kwargs) -> tuple:
         """
         统一板块热度因子计算入口
-        :param data_bundle: 预加载数据容器
-        :return: 板块级特征DataFrame，因子字典（含top3_sectors、adapt_score）
+        注意：top3_sectors 和 adapt_score 由 dataset.py 调用 select_top3_hot_sectors() 后
+             透传到 FeatureDataBundle，这里直接读取，不重复计算。
         """
-        trade_date = data_bundle.trade_date
-        # 调用原有逻辑获取Top3板块和轮动分
-        top3_result = self.select_top3_hot_sectors(trade_date)
-        top3_sectors = top3_result["top3_sectors"]
-        adapt_score = top3_result["adapt_score"]
+        trade_date   = data_bundle.trade_date
+        top3_sectors = data_bundle.top3_sectors
+        adapt_score  = data_bundle.adapt_score
 
-        # 组装因子字典
+        feature_df = pd.DataFrame([{
+            "trade_date":   trade_date,
+            "adapt_score":  adapt_score,
+            "top3_sectors": ",".join(top3_sectors),
+        }])
         factor_dict = {
             "top3_sectors": top3_sectors,
-            "adapt_score": adapt_score,
-            **{col: 0 for col in self.factor_columns}
+            "adapt_score":  adapt_score,
         }
-        factor_dict["adapt_score"] = adapt_score
-
-        # 组装特征DataFrame（全局因子，每行都带）
-        feature_df = pd.DataFrame([{
-            "trade_date": trade_date,
-            "adapt_score": adapt_score,
-            "top3_sectors": ",".join(top3_sectors)
-        }])
-
-        self.logger.info(f"[板块热度因子] {trade_date} 计算完成，Top3板块：{top3_sectors}，轮动分：{adapt_score}")
+        logger.info(
+            f"[板块热度] {trade_date} adapt_score={adapt_score} Top3={top3_sectors}"
+        )
         return feature_df, factor_dict
