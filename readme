@@ -21,8 +21,8 @@ QuantTradingSystem/
 │   └── metrics.py          # 回测绩效指标（夏普比率/最大回撤/胜率等）
 ├── learnEngine/            # 机器学习层【核心补全，原文件为空】
 │   ├── __init__.py         # 【新增】包导入初始化
-│   ├── label.py            # 【修改】修正文件名：lable→label，交易标签生成
-│   ├── dataset.py          # 【核心】训练/推理数据集构建（特征+标签绑定）
+│   ├──
+│   ├── dataset.py          # 【核心】训练集构建（
 │   └── model.py            # 【修改】修正文件名：modle→model，XGBoost模型训练/推理/保存
 ├── features/               # 特征工程层
 │   ├── __init__.py         # 【新增】包导入初始化
@@ -30,7 +30,7 @@ QuantTradingSystem/
 │   ├── technical_indicator.py # 技术指标（MA/RSI/MACD等）
 │   ├── ma_indicator.py     # 均线计算
 │   ├── macd_indicator.py   # macd金叉死叉计算
-│   └── market_stats.py     # 【核心补全】板块热度30个因子计算（预设接口）
+│   └── market_stats.py     # 【核心补全】板块热度30个因子计算
 └── utils/                  # 通用工具层
     ├── common_tools.py     # 通用函数（时间转换/数据格式）
     ├── db_utils.py         # 数据库操作（读写数据）

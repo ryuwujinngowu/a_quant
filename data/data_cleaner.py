@@ -6,7 +6,7 @@ import time
 from typing import Optional, List, Union
 import numpy as np
 import pandas as pd
-from data_fetcher import data_fetcher
+from data.data_fetcher import data_fetcher
 from utils.common_tools import auto_add_missing_table_columns
 from utils.common_tools import calc_15_years_date_range
 from utils.db_utils import db

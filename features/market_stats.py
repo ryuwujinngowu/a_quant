@@ -57,432 +57,208 @@ class SectorHeatFeature(BaseFeature):
                 factor_cols.append(f"sector{sector_id}_{day_tag}_loss")
         return factor_cols
 
-    # 【修改2】删除冗余的_get_lookback_trade_dates和_get_stock_daily_data方法，直接在calculate中调用
+    def _calculate_minute_hdi(self, minute_df: pd.DataFrame, pre_close: float, up_limit: float, down_limit: float):
 
-    # def _calculate_intraday_pattern_score(self, row: pd.Series, is_profit: bool = True) -> float:
-    #     """
-    #     【修改3】优化日内走势模式得分计算
-    #     :param row: 个股日线数据（必须包含open, close, pre_close）
-    #     :param is_profit: 是否为赚钱效应（True=profit，False=loss）
-    #     :return: 走势得分
-    #     """
-    #     open_price = row["open"]
-    #     close_price = row["close"]
-    #     pre_close = row["pre_close"]
-    #
-    #     if pre_close <= 0:
-    #         return 0.0
-    #
-    #     # 1. 计算开盘缺口幅度（直接*100作为得分）
-    #     open_gap_pct = (open_price / pre_close - 1) * 100
-    #
-    #     # 2. 计算当日涨跌幅度（直接*100作为得分）
-    #     daily_pct = (close_price / pre_close - 1) * 100
-    #
-    #     if is_profit:
-    #         # Profit：高开幅度 + 当日涨幅
-    #         return round(open_gap_pct + daily_pct, 2)
-    #     else:
-    #         # Loss：低开幅度（绝对值） + 当日跌幅（绝对值）
-    #         return round(abs(open_gap_pct) + abs(daily_pct), 2)
+        """
+        分时HDI（持股难度指数）
+        输出：
+            hdi
+            factors（原子因子）
+        """
 
-    def _calculate_minute_hdi(self, minute_df: pd.DataFrame, pre_close: float, up_limit: float, down_limit: float) -> \
-    Tuple[float, dict]:
-        """【替换原HDI】分钟线级持股难度指数HDI（0~100），越高持股难度越大"""
-        # 前置排序，剔除冗余校验（调用方已做空值判断）
-        if 'time' in minute_df.columns:
-            minute_df = minute_df.sort_values('time').reset_index(drop=True)
+        if minute_df.empty:
+            return 50, {}
 
-        # 向量化提取核心数组
-        close_arr = minute_df['close'].values
-        high_arr = minute_df['high'].values
-        low_arr = minute_df['low'].values
-        volume_arr = minute_df['volume'].values
+        minute_df = minute_df.sort_values("time")
 
-        # 当日核心价格锚点
-        day_open = minute_df['open'].iloc[0]
+        close_arr = minute_df["close"].values
+        open_arr = minute_df["open"].values
+        high_arr = minute_df["high"].values
+        low_arr = minute_df["low"].values
+        volume_arr = minute_df["volume"].values
+
+        day_open = open_arr[0]
+        day_close = close_arr[-1]
+
         day_high = high_arr.max()
         day_low = low_arr.min()
-        day_close = close_arr[-1]
-        day_high = day_low + 1e-6 if day_high == day_low else day_high
 
-        # 分钟线核心折磨因子计算
+        if day_high == day_low:
+            day_high += 1e-6
+
+        # ========= 基础振幅 =========
+
         amp = (day_high - day_low) / pre_close
-        cummax_close = np.maximum.accumulate(close_arr)
-        drawdown_arr = (cummax_close - close_arr) / cummax_close
-        max_dd_intra = drawdown_arr.max()
-        pullback_abs = abs((day_close - day_high) / day_high) if day_high != 0 else 0
-        ret_abs = abs(day_close / pre_close - 1)
 
-        # VWAP洗盘强度计算
+        # ========= 日内最大回撤 =========
+
+        cummax_close = np.maximum.accumulate(close_arr)
+
+        drawdown_arr = (cummax_close - close_arr) / (cummax_close + 1e-6)
+
+        max_dd_intra = drawdown_arr.max()
+
+        # ========= 收盘回撤 =========
+
+        pullback_abs = abs((day_close - day_high) / (day_high + 1e-6))
+
+        # ========= 当日涨跌 =========
+
+        ret = (day_close / pre_close) - 1
+
+        ret_abs = abs(ret)
+
+        # ========= VWAP计算 =========
+
         cum_volume = np.cumsum(volume_arr)
         cum_amount = np.cumsum(close_arr * volume_arr)
-        vwap_arr = cum_amount / (cum_volume + 1e-6)
-        cross_sign = np.sign(close_arr - vwap_arr)
-        cross_times = np.sum(np.abs(np.diff(cross_sign))) / 2
-        cross_times_norm = min(cross_times / 20, 1.0)
 
-        # 量价背离度计算
+        vwap_arr = cum_amount / (cum_volume + 1e-6)
+
+        # VWAP偏离度
+
+        vwap_deviation = np.mean(np.abs(close_arr - vwap_arr) / (vwap_arr + 1e-6))
+
+        # VWAP穿越
+
+        cross_sign = np.sign(close_arr - vwap_arr)
+
+        cross_times = np.sum(np.abs(np.diff(cross_sign))) / 2
+
+        cross_times_norm = min(cross_times / 20, 1)
+
+        # ========= 量价背离 =========
+
         ret_minute = np.diff(close_arr) / (close_arr[:-1] + 1e-6)
+
         vol_change = np.diff(volume_arr) / (volume_arr[:-1] + 1e-6)
-        divergence_count = np.sum((ret_minute > 0) & (vol_change < 0)) + np.sum((ret_minute < 0) & (vol_change > 0))
+
+        divergence_count = np.sum(
+            ((ret_minute > 0) & (vol_change < 0))
+            | ((ret_minute < 0) & (vol_change > 0))
+        )
+
         divergence_ratio = divergence_count / len(ret_minute) if len(ret_minute) > 0 else 0
 
-        # HDI加权合成（A股实战最优权重）
-        hdi_raw = (0.25 * amp + 0.30 * max_dd_intra + 0.20 * pullback_abs
-                   + 0.10 * ret_abs + 0.10 * cross_times_norm + 0.05 * divergence_ratio)
-        hdi = hdi_raw * 100
+        # ========= 开盘缺口 =========
 
-        # 极端场景惩罚
-        upper_shadow = day_high - max(day_close, day_open)
-        shadow_ratio = upper_shadow / (day_high - day_low)
-        if shadow_ratio > 0.6:
-            hdi += 15
-        # 涨停炸板惩罚
-        touch_up_limit = (high_arr >= up_limit - 0.01)
-        break_limit = np.diff(touch_up_limit.astype(int)) == -1
-        break_times = np.sum(break_limit)
-        hdi += min(break_times * 10, 30)
+        gap_return = (day_open / pre_close) - 1
 
-        # 值域截断
-        hdi = max(min(hdi, 100.0), 0.0)
+        # ========= 趋势稳定性 =========
 
-        # 打包增强因子（用于SEI修正）
-        seal_limit = np.diff(touch_up_limit.astype(int)) == 1
-        seal_times = np.sum(seal_limit)
-        touch_down_limit = (low_arr <= down_limit + 0.01)
-        lift_limit = np.diff(touch_down_limit.astype(int)) == -1
-        lift_times = np.sum(lift_limit)
+        x = np.arange(len(close_arr))
+
+        coef = np.polyfit(x, close_arr, 1)
+
+        trend = coef[0] * x + coef[1]
+
+        ss_res = np.sum((close_arr - trend) ** 2)
+
+        ss_tot = np.sum((close_arr - np.mean(close_arr)) ** 2)
+
+        trend_r2 = 1 - ss_res / (ss_tot + 1e-6)
+
+        # ========= CPR =========
+
         cpr = (day_close - day_low) / (day_high - day_low)
 
+        # ========= K线结构 =========
+
+        if day_close > day_open and day_close > pre_close:
+            candle_type = 2  # 真阳
+        elif day_close > day_open:
+            candle_type = 1  # 假阳
+        elif day_close < day_open and day_close < pre_close:
+            candle_type = -2  # 真阴
+        else:
+            candle_type = -1  # 假阴
+
+        # ========= 涨停检测 =========
+
+        touch_up_limit = high_arr >= up_limit - 0.01
+
+        break_limit = np.diff(touch_up_limit.astype(int)) == -1
+
+        break_times = np.sum(break_limit)
+
+        seal_limit = np.diff(touch_up_limit.astype(int)) == 1
+
+        seal_times = np.sum(seal_limit)
+
+        touch_down_limit = low_arr <= down_limit + 0.01
+
+        lift_limit = np.diff(touch_down_limit.astype(int)) == -1
+
+        lift_times = np.sum(lift_limit)
+
+        # ========= HDI合成 =========
+
+        hdi_raw = (
+                0.25 * amp
+                + 0.30 * max_dd_intra
+                + 0.20 * pullback_abs
+                + 0.10 * ret_abs
+                + 0.10 * cross_times_norm
+                + 0.05 * divergence_ratio
+        )
+
+        hdi = max(min(hdi_raw * 100, 100), 0)
+
         factors = {
+            "ret": ret,
             "cpr": cpr,
+            "gap_return": gap_return,
+            "trend_r2": trend_r2,
+            "vwap_deviation": vwap_deviation,
+            "candle_type": candle_type,
             "break_times": break_times,
             "seal_times": seal_times,
             "lift_times": lift_times,
-            "cross_times": cross_times,
-            "divergence_ratio": divergence_ratio,
             "day_close": day_close
         }
 
         return round(hdi, 2), factors
 
-    def _calculate_minute_sei(self, minute_df: pd.DataFrame, pre_close: float, up_limit: float,
-                              down_limit: float) -> float:
-        """分钟线级别个股情绪指数SEI（0~100），分数越高多头情绪越强"""
-        hdi, factors = self._calculate_minute_hdi(minute_df, pre_close, up_limit, down_limit)
-        if not factors:
-            return 50.0
+    def _calculate_minute_sei(self, minute_df, pre_close, up_limit, down_limit):
 
-        hdi_norm = hdi / 100
-        cpr = factors['cpr']
-        break_times = factors['break_times']
-        seal_times = factors['seal_times']
-        lift_times = factors['lift_times']
-        day_close = factors['day_close']
+        hdi, f = self._calculate_minute_hdi(minute_df, pre_close, up_limit, down_limit)
 
-        # 基础情绪分（tanh非线性映射，平盘为50分中性值）
-        ret = (day_close / pre_close) - 1
+        if not f:
+            return 50
+
+        ret = f["ret"]
+
         base_score = 50 + 50 * math.tanh(10 * ret)
 
-        # 分场景HDI核心修正
-        K_UP = 0.3
-        K_DOWN = 0.2
-        adjustment = 0.0
+        gap_adjust = f["gap_return"] * 20
 
-        if ret > 1e-6:
-            # 上涨场景：HDI越高、收得越差，惩罚越重
-            penalty_factor = 0.5 + 0.5 * (1 - cpr)
-            adjustment = - K_UP * hdi_norm * penalty_factor * base_score
-            # 炸板回封回补、炸板未回封额外惩罚
-            if break_times > 0:
-                if abs(day_close - up_limit) < 0.01:
-                    adjustment += min(break_times * 2, 5)
-                else:
-                    adjustment -= min(break_times * 3, 10)
-        elif ret < -1e-6:
-            # 下跌场景：探底回升HDI越高加分越多，冲高回落HDI越高扣分越多
-            adjustment = K_DOWN * hdi_norm * (cpr - 0.5) * (100 - base_score)
-            # 跌停翘板有承接回补情绪分
-            if lift_times > 0 and cpr > 0.5:
-                adjustment += min(lift_times * 2, 5)
+        trend_adjust = (f["trend_r2"] - 0.5) * 15
 
-        # 最终SEI值域截断
-        sei = max(min(base_score + adjustment, 100.0), 0.0)
+        vwap_adjust = f["vwap_deviation"] * 20
+
+        candle_adjust = {
+            2: 6,
+            1: 2,
+            -1: -2,
+            -2: -6
+        }[f["candle_type"]]
+
+        limit_adjust = 0
+
+        if f["break_times"] > 0:
+            if abs(f["day_close"] - up_limit) < 0.01:
+                limit_adjust += min(f["break_times"] * 2, 6)
+            else:
+                limit_adjust -= min(f["break_times"] * 3, 10)
+
+        sei = base_score + gap_adjust + trend_adjust + vwap_adjust + candle_adjust + limit_adjust
+
+        sei = max(min(sei, 100), 0)
+
         return round(sei, 2)
 
 
-    def _calculate_minute_drop_score(self, minute_df):
-        """
-        终极兼容版：适配Decimal类型字段，零报错运行，和拉升得分逻辑完全对称
-        业务规则：5分钟级别计算，早盘9:30-10:00权重最高（杀跌最恐慌），越往后递减，无5分钟跌幅>4%直接返回0
-        :param minute_df: pandas DataFrame，必填列：trade_time, open, high, low, close, amount（支持Decimal/float/int类型）
-        :return:
-            minute_drop_score: 0-100的杀跌评分，得分越高杀跌越猛、亏钱效应越强
-            drop_pct: 全天最大5分钟跌幅（%），无符合条件则为0.0
-            drop_time: 最大跌幅对应的5分钟结束时间（datetime），无符合条件则为None
-        """
-        # -------------------------- 1. 最严谨的入参校验（和拉升完全一致） --------------------------
-        if not isinstance(minute_df, pd.DataFrame):
-            return 0.0, 0.0, None
 
-        required_cols = ['trade_time', 'open', 'high', 'low', 'close', 'amount']
-        missing_cols = [col for col in required_cols if col not in minute_df.columns]
-        if len(missing_cols) > 0:
-            return 0.0, 0.0, None
-
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # 深拷贝避免修改原数据
-        minute_df = minute_df.dropna(subset=required_cols).copy()
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 2. 核心修复：Decimal转float（和拉升完全一致） --------------------------
-        numeric_cols = ['open', 'high', 'low', 'close', 'amount']
-        for col in numeric_cols:
-            # 处理Decimal/int/str等所有类型，统一转为float
-            minute_df[col] = minute_df[col].apply(
-                lambda x: float(x) if isinstance(x, (int, float, Decimal)) else (float(x) if x != '' else 0.0)
-            )
-        # 剔除转换后为0或空的异常值
-        minute_df = minute_df[(minute_df['open'] > 1e-6) & (minute_df['amount'] >= 0)].copy()
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 3. 时间字段标准化（和拉升完全一致） --------------------------
-        minute_df['trade_time'] = pd.to_datetime(minute_df['trade_time'], errors='coerce')
-        minute_df = minute_df.dropna(subset=['trade_time']).sort_values('trade_time').reset_index(drop=True)
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 4. 1分钟转5分钟K线（和拉升完全一致） --------------------------
-        minute_df['five_min_end_time'] = minute_df['trade_time'].dt.floor('5min') + pd.Timedelta(minutes=5)
-        five_min_df = minute_df.groupby('five_min_end_time', as_index=False).agg(
-            open=('open', 'first'),
-            high=('high', 'max'),
-            low=('low', 'min'),
-            close=('close', 'last'),
-            amount=('amount', 'sum'),
-            trade_time=('trade_time', 'last')
-        )
-        if five_min_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 5. 预计算全局统计值（和拉升完全一致） --------------------------
-        bar_count = len(five_min_df)
-        total_daily_amount = five_min_df['amount'].sum()
-        avg_five_min_amount = total_daily_amount / bar_count if bar_count > 0 and total_daily_amount > 1e-6 else 0.0
-        max_five_min_amount = five_min_df['amount'].max() if bar_count > 0 else 0.0
-
-        # -------------------------- 6. 计算5分钟跌幅，过滤>4%的有效杀跌bar（核心差异1） --------------------------
-        # 跌幅计算：(开盘价-收盘价)/开盘价*100，跌幅>4%才视为有效杀跌
-        five_min_df['five_min_drop'] = (five_min_df['open'] - five_min_df['close']) / five_min_df['open'] * 100
-        qualified_df = five_min_df[five_min_df['five_min_drop'] > 4].copy()
-        if qualified_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 7. 提取最大跌幅和对应时间（核心差异2） --------------------------
-        max_drop_row = qualified_df.loc[qualified_df['five_min_drop'].idxmax()]
-        drop_pct = round(float(max_drop_row['five_min_drop']), 2)
-        drop_time = max_drop_row['trade_time']
-
-        # -------------------------- 8. 时间权重计算（和拉升完全一致，早盘杀跌最恐慌） --------------------------
-        def get_time_weight_score(trade_time):
-            if pd.isna(trade_time):
-                return 0.0
-            hour = trade_time.hour
-            minute = trade_time.minute
-            total_minute = hour * 60 + minute
-            if 575 <= total_minute <= 600:  # 9:35-10:00（早盘杀跌最恐怖，权重100）
-                return 100.0
-            elif 605 <= total_minute <= 630:  # 10:05-10:30（权重80）
-                return 80.0
-            elif 635 <= total_minute <= 690:  # 10:35-11:30（权重60）
-                return 60.0
-            elif 785 <= total_minute <= 840:  # 13:05-14:00（权重40）
-                return 40.0
-            elif 845 <= total_minute <= 900:  # 14:05-15:00（权重20）
-                return 20.0
-            else:
-                return 0.0
-
-        qualified_df['time_score'] = qualified_df['trade_time'].apply(get_time_weight_score).astype(float)
-
-        # -------------------------- 9. 多维度标准化得分（权重和拉升一致，逻辑对称） --------------------------
-        WEIGHT_PRICE = 0.3  # 跌幅幅度得分（对应拉升的涨幅幅度）
-        WEIGHT_TIME = 0.4  # 时间权重得分（早盘杀跌权重最高）
-        WEIGHT_SPIKE = 0.1  # 放量幅度得分（杀跌放量越狠，得分越高）
-        WEIGHT_AMOUNT = 0.2  # 成交金额得分（杀跌金额越大，得分越高）
-
-        # 跌幅幅度得分（核心差异3：涨幅→跌幅，逻辑对称）
-        qualified_df['price_score'] = (qualified_df['five_min_drop'] / 10 * 100).clip(0, 100).astype(float)
-
-        # 放量幅度得分（逻辑对称：杀跌时放量越猛，得分越高）
-        if avg_five_min_amount < 1e-6:
-            qualified_df['spike_score'] = 0.0
-        else:
-            qualified_df['spike_score'] = (qualified_df['amount'] / avg_five_min_amount / 10 * 100).clip(0, 100).astype(
-                float)
-
-        # 成交金额得分（和拉升逻辑完全一致）
-        if max_five_min_amount < 1e-6:
-            qualified_df['amount_score'] = 0.0
-        else:
-            qualified_df['amount_score'] = (qualified_df['amount'] / max_five_min_amount * 100).clip(0, 100).astype(
-                float)
-
-        # -------------------------- 10. 加权计算最终得分（和拉升完全一致） --------------------------
-        qualified_df['bar_score'] = (
-                qualified_df['price_score'] * WEIGHT_PRICE +
-                qualified_df['time_score'] * WEIGHT_TIME +
-                qualified_df['spike_score'] * WEIGHT_SPIKE +
-                qualified_df['amount_score'] * WEIGHT_AMOUNT
-        ).astype(float)
-
-        # 归一化得分（和拉升一致，MAX_POSSIBLE_TOTAL=200，保证值域0-100）
-        total_weighted_score = float(qualified_df['bar_score'].sum())
-        MAX_POSSIBLE_TOTAL = 200  # 和拉升保持一致，2根完美杀跌bar即满分
-        minute_drop_score = round(min((total_weighted_score / MAX_POSSIBLE_TOTAL) * 100, 100.0), 2)
-
-        return minute_drop_score, drop_pct, drop_time
-
-    def _calculate_minute_boost_score(self, minute_df):
-        """
-        终极兼容版：适配Decimal类型字段，零报错运行，完全匹配你的业务规则和入参出参
-        业务规则：5分钟级别计算，早盘9:30-10:00权重最高，越往后递减，无5分钟涨幅>4%直接返回0
-        :param minute_df: pandas DataFrame，必填列：trade_time, open, high, low, close, amount（支持Decimal/float/int类型）
-        :return:
-            minute_boost_score: 0-100的动量评分，得分越高拉升动量越足
-            boost_pct: 全天最大5分钟涨幅（%），无符合条件则为0.0
-            boost_time: 最大涨幅对应的5分钟结束时间（datetime），无符合条件则为None
-        """
-        # -------------------------- 1. 最严谨的入参校验 --------------------------
-        if not isinstance(minute_df, pd.DataFrame):
-            return 0.0, 0.0, None
-
-        required_cols = ['trade_time', 'open', 'high', 'low', 'close', 'amount']
-        missing_cols = [col for col in required_cols if col not in minute_df.columns]
-        if len(missing_cols) > 0:
-            return 0.0, 0.0, None
-
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # 深拷贝避免修改原数据
-        minute_df = minute_df.dropna(subset=required_cols).copy()
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 2. 核心修复：Decimal转float，解决类型不兼容 --------------------------
-        # 定义需要转换的数值列
-        numeric_cols = ['open', 'high', 'low', 'close', 'amount']
-        for col in numeric_cols:
-            # 处理Decimal/int/str等所有类型，统一转为float
-            minute_df[col] = minute_df[col].apply(
-                lambda x: float(x) if isinstance(x, (int, float, Decimal)) else (float(x) if x != '' else 0.0)
-            )
-        # 剔除转换后为0或空的异常值
-        minute_df = minute_df[(minute_df['open'] > 1e-6) & (minute_df['amount'] >= 0)].copy()
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 3. 时间字段标准化 --------------------------
-        minute_df['trade_time'] = pd.to_datetime(minute_df['trade_time'], errors='coerce')
-        minute_df = minute_df.dropna(subset=['trade_time']).sort_values('trade_time').reset_index(drop=True)
-        if minute_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 4. 1分钟转5分钟K线 --------------------------
-        minute_df['five_min_end_time'] = minute_df['trade_time'].dt.floor('5min') + pd.Timedelta(minutes=5)
-        five_min_df = minute_df.groupby('five_min_end_time', as_index=False).agg(
-            open=('open', 'first'),
-            high=('high', 'max'),
-            low=('low', 'min'),
-            close=('close', 'last'),
-            amount=('amount', 'sum'),
-            trade_time=('trade_time', 'last')
-        )
-        if five_min_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 5. 预计算全局统计值 --------------------------
-        bar_count = len(five_min_df)
-        total_daily_amount = five_min_df['amount'].sum()
-        avg_five_min_amount = total_daily_amount / bar_count if bar_count > 0 and total_daily_amount > 1e-6 else 0.0
-        max_five_min_amount = five_min_df['amount'].max() if bar_count > 0 else 0.0
-
-        # -------------------------- 6. 计算5分钟涨幅，过滤>4%的bar --------------------------
-        five_min_df['five_min_rise'] = (five_min_df['close'] - five_min_df['open']) / five_min_df['open'] * 100
-        qualified_df = five_min_df[five_min_df['five_min_rise'] > 4].copy()
-        if qualified_df.empty:
-            return 0.0, 0.0, None
-
-        # -------------------------- 7. 提取最大涨幅和对应时间 --------------------------
-        max_rise_row = qualified_df.loc[qualified_df['five_min_rise'].idxmax()]
-        boost_pct = round(float(max_rise_row['five_min_rise']), 2)
-        boost_time = max_rise_row['trade_time']
-
-        # -------------------------- 8. 时间权重计算 --------------------------
-        def get_time_weight_score(trade_time):
-            if pd.isna(trade_time):
-                return 0.0
-            hour = trade_time.hour
-            minute = trade_time.minute
-            total_minute = hour * 60 + minute
-            if 575 <= total_minute <= 600:
-                return 100.0
-            elif 605 <= total_minute <= 630:
-                return 80.0
-            elif 635 <= total_minute <= 690:
-                return 60.0
-            elif 785 <= total_minute <= 840:
-                return 40.0
-            elif 845 <= total_minute <= 900:
-                return 20.0
-            else:
-                return 0.0
-
-        qualified_df['time_score'] = qualified_df['trade_time'].apply(get_time_weight_score).astype(float)
-
-        # -------------------------- 9. 多维度标准化得分（全float类型） --------------------------
-        WEIGHT_PRICE = 0.3  #价格幅度得分
-        WEIGHT_TIME = 0.4      #时间权重得分
-        WEIGHT_SPIKE = 0.1         #放量幅度
-        WEIGHT_AMOUNT = 0.2           #成交金额得分
-
-        # 价格幅度得分（转float）
-        qualified_df['price_score'] = (qualified_df['five_min_rise'] / 10 * 100).clip(0, 100).astype(float)
-
-        # 放量幅度得分（转float）
-        if avg_five_min_amount < 1e-6:
-            qualified_df['spike_score'] = 0.0
-        else:
-            qualified_df['spike_score'] = (qualified_df['amount'] / avg_five_min_amount / 10 * 100).clip(0, 100).astype(
-                float)
-
-        # 成交金额得分（转float）
-        if max_five_min_amount < 1e-6:
-            qualified_df['amount_score'] = 0.0
-        else:
-            qualified_df['amount_score'] = (qualified_df['amount'] / max_five_min_amount * 100).clip(0, 100).astype(
-                float)
-
-        # -------------------------- 10. 加权计算最终得分（全float运算） --------------------------
-        qualified_df['bar_score'] = (
-                qualified_df['price_score'] * WEIGHT_PRICE +
-                qualified_df['time_score'] * WEIGHT_TIME +
-                qualified_df['spike_score'] * WEIGHT_SPIKE +
-                qualified_df['amount_score'] * WEIGHT_AMOUNT
-        ).astype(float)
-
-        # 归一化得分
-        total_weighted_score = float(qualified_df['bar_score'].sum())
-        MAX_POSSIBLE_TOTAL = 200  # 6个5分钟bar × 100分
-        minute_boost_score = round(min((total_weighted_score / MAX_POSSIBLE_TOTAL) * 100, 100.0), 2)
-
-        return minute_boost_score, boost_pct, boost_time
 
     def calculate(
             self,
@@ -1031,7 +807,7 @@ if __name__ == "__main__":
         callable= SectorHeatFeature()
         # tag = callable._gen_factor_columns()
         # #获取目标
-        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-02-04")
+        top3_sector = callable.select_top3_hot_sectors(trade_date="2026-03-09")
         print(top3_sector)
         #     # ========== 手动修改测试参数即可 ==========
         #     TEST_TS_CODE = "002015.SZ"  # 测试个股代码600759.SH   300189.sz     300164.SZ
@@ -1064,11 +840,4 @@ if __name__ == "__main__":
         #
         #     # 直接输出结果
         #     print("=" * 60)
-        #     print(f"测试标的：{TEST_TS_CODE} | 测试日期：{TEST_TRADE_DATE}")
-        #     print("-" * 60)
-        #     print(f"2. 分钟线SEI情绪指数：{sei_score:.2f}")
-        #     print("-" * 60)
-        #     print(f"3. 分钟线拉升得分：{boost_score:.2f}")
-        #     print(f"   最大5分钟涨幅：{boost_pct:.2f}%")
-        #     print(f"   对应拉升时间：{boost_time}")
-        #     print("=" * 60)
+
