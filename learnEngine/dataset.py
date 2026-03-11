@@ -101,6 +101,9 @@ class ProcessedDatesManager:
 class DataSetAssembler:
     """单日数据校验 & 清洗"""
 
+    # 价格为 0 必属异常的核心列（停牌/数据缺失导致，宁可丢行也不污染模型）
+    _PRICE_SANITY_COL = "stock_close_d0"
+
     @staticmethod
     def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
@@ -114,6 +117,23 @@ class DataSetAssembler:
 
         df = df.drop_duplicates(subset=["stock_code", "trade_date"])
         df = df.dropna(subset=["label1", "label2"])
+
+        # ── 丢弃 D 日收盘价缺失或为零的行 ───────────────────────────────
+        # 该列为零必然是停牌 / 数据入库异常，宁可损失训练样本，
+        # 也不能让"收盘价=0"这种明显错误值进入特征矩阵污染模型。
+        if DataSetAssembler._PRICE_SANITY_COL in df.columns:
+            bad = df[DataSetAssembler._PRICE_SANITY_COL].isna() | \
+                  (df[DataSetAssembler._PRICE_SANITY_COL] <= 0)
+            bad_count = int(bad.sum())
+            if bad_count:
+                logger.warning(
+                    f"[DataSetAssembler] 丢弃 {DataSetAssembler._PRICE_SANITY_COL} "
+                    f"异常行（停牌/数据缺失）: {bad_count} 行"
+                )
+                df = df[~bad]
+
+        # ── 特征 NaN 填 0（中性值，与 FeatureDataBundle 设计对齐）────────
+        # 注意：label1/label2 已在上方 dropna 保证，此处 fillna 不会影响标签
         df = df.fillna(0)
         return df.reset_index(drop=True)
 
@@ -302,7 +322,31 @@ if __name__ == "__main__":
     # ---------- 确定待处理日期 ----------
     all_trade_dates = get_trade_dates(START_DATE, END_DATE)
     to_process      = [d for d in all_trade_dates if not dates_manager.is_processed(d)]
-    # 训练集 CSV 被删除时，已处理记录与实际文件不一致，需重置并重跑
+
+    # ── 启动一致性检查 ─────────────────────────────────────────────────────
+    # 场景：进程在"CSV 写入成功"与"标记已处理"之间崩溃
+    # 结果：数据已落盘但未标记 → 下次启动会重跑该日，写入重复行
+    # 修复：读取 CSV 中已有的日期，对未标记但已有数据的日期补充标记，
+    #       避免重复写入（最终校验的 deduplicate 作为兜底）
+    if os.path.exists(OUTPUT_CSV_PATH) and to_process:
+        try:
+            csv_dates = set(
+                pd.read_csv(OUTPUT_CSV_PATH, usecols=["trade_date"])["trade_date"]
+                .astype(str).unique()
+            )
+            retroactive = csv_dates & set(all_trade_dates) - set(dates_manager.processed_dates)
+            if retroactive:
+                logger.info(
+                    f"启动一致性修复：CSV 中已有数据但未标记完成的日期 → {sorted(retroactive)}，"
+                    f"自动补充标记（避免重复写入）"
+                )
+                for d in sorted(retroactive):
+                    dates_manager.add(d)
+                to_process = [d for d in all_trade_dates if not dates_manager.is_processed(d)]
+        except Exception as e:
+            logger.warning(f"启动一致性检查失败（忽略，继续正常处理）: {e}")
+
+    # ── CSV 删除但全部日期已标记 → 重置 ────────────────────────────────────
     if not to_process and not os.path.exists(OUTPUT_CSV_PATH):
         logger.warning("训练集 CSV 不存在但所有日期已标记为处理完成，重置记录并重新生成")
         dates_manager.reset()
@@ -311,7 +355,11 @@ if __name__ == "__main__":
         logger.info("✅ 所有日期已处理完成！")
         validate_train_dataset(OUTPUT_CSV_PATH)
         exit(0)
-    logger.info(f"待处理日期: {to_process}")
+    logger.info(f"待处理日期（共 {len(to_process)} 个）: {to_process}")
+
+    # ── 连续失败计数器：超阈值直接退出，避免系统性故障下静默空跑 ──────────────
+    MAX_CONSECUTIVE_FAILS = 5   # 连续 5 个日期失败 → 视为系统性异常，终止
+    consecutive_fails = 0
 
     # ---------- CSV 写入模式 ----------
     first_write   = not os.path.exists(OUTPUT_CSV_PATH)
@@ -331,6 +379,7 @@ if __name__ == "__main__":
 
             if not top3_sectors:
                 logger.warning(f"{date} Top3 板块为空，跳过")
+                consecutive_fails = 0  # 数据合理缺失，非系统性错误
                 continue
 
             # ---- Step 2: ST + 宏观数据入库 ----
@@ -409,6 +458,7 @@ if __name__ == "__main__":
             })
             if not target_ts_codes:
                 logger.warning(f"{date} 候选池为空，跳过")
+                consecutive_fails = 0  # 候选池为空属于正常数据情况
                 continue
 
             data_bundle = FeatureDataBundle(
@@ -455,12 +505,33 @@ if __name__ == "__main__":
             )
             first_write = False
 
-            # ---- Step 10: 标记已处理（写入成功后才标记）----
-            dates_manager.add(date)
+            # ---- Step 10: 标记已处理（写入成功后才标记，保证幂等）----
+            # 用独立 try 包裹：若 JSON 写盘失败（磁盘满等），不应影响数据，
+            # 下次启动时由"启动一致性检查"补充标记即可
+            try:
+                dates_manager.add(date)
+            except Exception as mark_err:
+                logger.warning(
+                    f"{date} 标记已处理失败（数据已写入，下次启动将自动补偿）: {mark_err}"
+                )
+
+            consecutive_fails = 0  # 本日成功，重置计数器
             logger.info(f"✅ {date} 处理完成，写入 {len(clean_df)} 行")
 
         except Exception as e:
-            logger.error(f"{date} 处理失败: {e}", exc_info=True)
+            consecutive_fails += 1
+            logger.error(
+                f"{date} 处理失败 (连续失败 {consecutive_fails}/{MAX_CONSECUTIVE_FAILS}): {e}",
+                exc_info=True,
+            )
+            if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
+                logger.critical(
+                    f"连续 {MAX_CONSECUTIVE_FAILS} 个日期处理失败，"
+                    f"疑似系统性故障（DB 断连 / 数据异常），终止训练集生成"
+                )
+                raise RuntimeError(
+                    f"训练集生成异常退出：连续 {MAX_CONSECUTIVE_FAILS} 个日期失败"
+                ) from e
             continue
 
     # ==================== 最终校验 ====================
