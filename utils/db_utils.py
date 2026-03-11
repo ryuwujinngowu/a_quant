@@ -231,14 +231,15 @@ class DBConnector:
         try:
             columns = df.columns.tolist()
             placeholders = ", ".join(["%s"] * len(columns))
-            sql_columns = ", ".join(columns)
+            sql_columns = ", ".join(f"`{c}`" for c in columns)
 
             if ignore_duplicate:
-                update_clause = ", ".join([f"{c}=VALUES({c})" for c in columns])
+                update_clause = ", ".join(f"`{c}`=VALUES(`{c}`)" for c in columns)
                 sql = f"INSERT INTO {table_name} ({sql_columns}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {update_clause}"
             else:
                 sql = f"INSERT INTO {table_name} ({sql_columns}) VALUES ({placeholders})"
 
+            df = df.where(pd.notnull(df), None)  # NaN/NaT → None → SQL NULL
             data = list(df.itertuples(index=False, name=None))  # ✅ 内存优化
 
             CHUNK = 1000

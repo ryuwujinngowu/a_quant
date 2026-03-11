@@ -41,9 +41,11 @@ class DataCleaner:
         date_fields = ["list_date", "delist_date", "end_date", "start_date", "trade_date"]
         for field in date_fields:
             if field in df_cleaned.columns:
-                df_cleaned[field] = pd.to_datetime(
+                formatted = pd.to_datetime(
                     df_cleaned[field], format="%Y%m%d", errors="coerce"
-                ).dt.strftime("%Y-%m-%d")
+                )
+                # NaT 经 strftime 会变字面量 "NaN"，用 where 还原成 None
+                df_cleaned[field] = formatted.dt.strftime("%Y-%m-%d").where(formatted.notna(), None)
 
         # 核心NOT NULL字段非空兜底（上游已做基础校验，仅保留兜底）
         not_null_fields = ["ts_code", "symbol", "name", "exchange", "list_date"]
@@ -58,16 +60,15 @@ class DataCleaner:
             elif pd.api.types.is_numeric_dtype(dtype):
                 df_cleaned[field] = df_cleaned[field].fillna(0)
 
-        # # 其他字段空值填充（统一逻辑，提升效率）
-        # other_cols = [col for col in df_cleaned.columns if col not in not_null_fields]
-        # for col in other_cols:
-        #     dtype = df_cleaned[col].dtype
-        #     if pd.api.types.is_object_dtype(dtype):
-        #         df_cleaned[col] = df_cleaned[col].fillna("")
-        #     elif pd.api.types.is_numeric_dtype(dtype):
-        #         df_cleaned[col] = df_cleaned[col].fillna(0)
-        #     elif pd.api.types.is_datetime64_any_dtype(dtype):
-        #         df_cleaned[col] = df_cleaned[col].fillna(None)
+        # 其他字段空值填充（统一逻辑，提升效率）
+        other_cols = [col for col in df_cleaned.columns if col not in not_null_fields]
+        for col in other_cols:
+            dtype = df_cleaned[col].dtype
+            if pd.api.types.is_object_dtype(dtype):
+                df_cleaned[col] = df_cleaned[col].fillna("")
+            elif pd.api.types.is_numeric_dtype(dtype):
+                df_cleaned[col] = df_cleaned[col].fillna(0)
+            # datetime 列保持 NaT，由 db_utils 层统一转 None
 
         return df_cleaned
 
