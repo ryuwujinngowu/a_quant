@@ -61,13 +61,23 @@ class DataCleaner:
                 df_cleaned[field] = df_cleaned[field].fillna(0)
 
         # 其他字段空值填充（统一逻辑，提升效率）
-        other_cols = [col for col in df_cleaned.columns if col not in not_null_fields]
+        # 排除日期字段：已转为 "YYYY-MM-DD"/None，None 应保持为 SQL NULL，不能填 ""
+        other_cols = [col for col in df_cleaned.columns
+                      if col not in not_null_fields and col not in date_fields]
         for col in other_cols:
             dtype = df_cleaned[col].dtype
-            if pd.api.types.is_object_dtype(dtype):
-                df_cleaned[col] = df_cleaned[col].fillna("")
-            elif pd.api.types.is_numeric_dtype(dtype):
+            if pd.api.types.is_numeric_dtype(dtype):
                 df_cleaned[col] = df_cleaned[col].fillna(0)
+            elif pd.api.types.is_object_dtype(dtype):
+                # object 列可能是"字符串数字"（API 返 string，DB 存 INT/FLOAT）
+                # 尝试转数值；成功则填 0，否则才填 ""（真正的字符串列）
+                coerced = pd.to_numeric(df_cleaned[col], errors="coerce")
+                non_null = df_cleaned[col].notna()
+                if non_null.any() and coerced[non_null].notna().all():
+                    # 所有非空值均可转为数值 → 该列本质是数值列
+                    df_cleaned[col] = coerced.fillna(0)
+                else:
+                    df_cleaned[col] = df_cleaned[col].fillna("")
             # datetime 列保持 NaT，由 db_utils 层统一转 None
 
         return df_cleaned
