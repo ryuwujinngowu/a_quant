@@ -114,17 +114,77 @@ class FeatureDataBundle:
             raise
 
     def _load_macro_data(self):
-        """预加载 D 日市场宏观数据（涨跌停池 / 连板天梯 / 最强板块 / 指数日线）"""
+        """
+        预加载 D 日市场宏观数据。
+        访问链路：DB → API（DB 无数据时自动通过 cleaner 补拉并写入 DB，下次直接走 DB）
+        limit_list / limit_step / limit_cpt / index_daily 均有 API 兜底；
+        market_vol 来自 kline_day 聚合，依赖 kline_day 已落库，无单独 API。
+        """
         try:
-            td = self.trade_date
-            self.macro_cache["limit_up_df"]   = get_limit_list_ths(td, limit_type="涨停池")
-            self.macro_cache["limit_down_df"] = get_limit_list_ths(td, limit_type="跌停池")
-            self.macro_cache["limit_step_df"] = get_limit_step(td)
-            self.macro_cache["limit_cpt_df"]  = get_limit_cpt_list(td)
-            self.macro_cache["index_df"]      = get_index_daily(
-                td, ts_code_list=["000001.SH", "399001.SZ", "399006.SZ"]
-            )
+            td     = self.trade_date
+            td_fmt = td.replace("-", "")     # YYYYMMDD，data_cleaner / data_fetcher 格式
+
+            # ── 涨跌停池（合并补拉，一次接口同时覆盖两张池）──────────────────
+            limit_up_df   = get_limit_list_ths(td, limit_type="涨停池")
+            limit_down_df = get_limit_list_ths(td, limit_type="跌停池")
+            if limit_up_df.empty and limit_down_df.empty:
+                logger.info(f"[DataBundle] {td} 涨跌停池 DB无数据，接口补拉入库...")
+                try:
+                    data_cleaner.clean_and_insert_limit_list_ths(trade_date=td_fmt)
+                    limit_up_df   = get_limit_list_ths(td, limit_type="涨停池")
+                    limit_down_df = get_limit_list_ths(td, limit_type="跌停池")
+                    logger.info(
+                        f"[DataBundle] 涨跌停池补拉完成 | "
+                        f"涨停:{len(limit_up_df)} 跌停:{len(limit_down_df)}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[DataBundle] 涨跌停池接口补拉失败（本次用空数据）：{e}")
+            self.macro_cache["limit_up_df"]   = limit_up_df
+            self.macro_cache["limit_down_df"] = limit_down_df
+
+            # ── 连板天梯 ──────────────────────────────────────────────────────
+            limit_step_df = get_limit_step(td)
+            if limit_step_df.empty:
+                logger.info(f"[DataBundle] {td} 连板天梯 DB无数据，接口补拉入库...")
+                try:
+                    data_cleaner.clean_and_insert_limit_step(trade_date=td_fmt)
+                    limit_step_df = get_limit_step(td)
+                    logger.info(f"[DataBundle] 连板天梯补拉完成 | {len(limit_step_df)} 行")
+                except Exception as e:
+                    logger.warning(f"[DataBundle] 连板天梯接口补拉失败（本次用空数据）：{e}")
+            self.macro_cache["limit_step_df"] = limit_step_df
+
+            # ── 最强板块 ──────────────────────────────────────────────────────
+            limit_cpt_df = get_limit_cpt_list(td)
+            if limit_cpt_df.empty:
+                logger.info(f"[DataBundle] {td} 最强板块 DB无数据，接口补拉入库...")
+                try:
+                    data_cleaner.clean_and_insert_limit_cpt_list(trade_date=td_fmt)
+                    limit_cpt_df = get_limit_cpt_list(td)
+                    logger.info(f"[DataBundle] 最强板块补拉完成 | {len(limit_cpt_df)} 行")
+                except Exception as e:
+                    logger.warning(f"[DataBundle] 最强板块接口补拉失败（本次用空数据）：{e}")
+            self.macro_cache["limit_cpt_df"] = limit_cpt_df
+
+            # ── 指数日线 ──────────────────────────────────────────────────────
+            index_codes = ["000001.SH", "399001.SZ", "399006.SZ"]
+            index_df    = get_index_daily(td, ts_code_list=index_codes)
+            if index_df.empty:
+                logger.info(f"[DataBundle] {td} 指数日线 DB无数据，接口补拉入库...")
+                try:
+                    for code in index_codes:
+                        data_cleaner.clean_and_insert_index_daily(
+                            ts_code=code, start_date=td_fmt, end_date=td_fmt
+                        )
+                    index_df = get_index_daily(td, ts_code_list=index_codes)
+                    logger.info(f"[DataBundle] 指数日线补拉完成 | {len(index_df)} 行")
+                except Exception as e:
+                    logger.warning(f"[DataBundle] 指数日线接口补拉失败（本次用空数据）：{e}")
+            self.macro_cache["index_df"] = index_df
+
+            # ── 全市场成交量（kline_day 聚合，依赖 kline_day 已落库）──────────
             self.macro_cache["market_vol_df"] = get_market_total_volume(self.lookback_dates_5d)
+
             logger.info(
                 f"[DataBundle] 宏观数据加载完成 | "
                 f"涨停:{len(self.macro_cache['limit_up_df'])} "
