@@ -29,9 +29,8 @@ class DataCleaner:
         common_cols = [col for col in df.columns if col in db_cols]
         return df[common_cols].copy()
 
-    # ===================== 核心清洗方法 =====================
     def _clean_special_fields(self, df: pd.DataFrame) -> pd.DataFrame:
-        """通用格式清洗（保留核心逻辑，删除冗余注释/校验）"""
+        """通用格式清洗（适配涨跌停池/板块表建表结构，解决1366/1265报错）"""
         df_cleaned = df.copy()
         # 批量重命名关键字段（可扩展）
         reserved_field_mapping = {"change": "change1", "vol": "volume"}
@@ -44,10 +43,10 @@ class DataCleaner:
                 formatted = pd.to_datetime(
                     df_cleaned[field], format="%Y%m%d", errors="coerce"
                 )
-                # NaT 经 strftime 会变字面量 "NaN"，用 where 还原成 None
+                # NaT 还原为 None，由数据库层处理
                 df_cleaned[field] = formatted.dt.strftime("%Y-%m-%d").where(formatted.notna(), None)
 
-        # 核心NOT NULL字段非空兜底（上游已做基础校验，仅保留兜底）
+        # 核心NOT NULL字段非空兜底（与建表约束对齐）
         not_null_fields = ["ts_code", "symbol", "name", "exchange", "list_date"]
         for field in not_null_fields:
             if field not in df_cleaned.columns:
@@ -60,25 +59,66 @@ class DataCleaner:
             elif pd.api.types.is_numeric_dtype(dtype):
                 df_cleaned[field] = df_cleaned[field].fillna(0)
 
-        # 其他字段空值填充（统一逻辑，提升效率）
-        # 排除日期字段：已转为 "YYYY-MM-DD"/None，None 应保持为 SQL NULL，不能填 ""
-        other_cols = [col for col in df_cleaned.columns
-                      if col not in not_null_fields and col not in date_fields]
+        # ========== 核心配置：与建表结构强绑定 ==========
+        # 1. 整数字段白名单（建表为INT类型，绝对禁止空字符串，强制填0）
+        INTEGER_FIELDS = [
+            "open_num", "days", "up_nums", "cons_nums",  # 涨跌停池表
+            "nums"  # 连板天梯表
+        ]
+        # 2. 浮点数字段配置（建表为FLOAT，单精度仅保留2位小数，避免精度溢出）
+        FLOAT_FIELDS = [
+            "lu_limit_order", "limit_order", "limit_amount", "turnover_rate",
+            "free_float", "limit_up_suc_rate", "turnover", "rise_rate", "sum_float",
+            "pct_chg"  # 涨跌停池/板块表所有FLOAT字段
+        ]
+        # 3. 纯字符串字段（建表为VARCHAR，空值填''，与建表默认值对齐）
+        STRING_FIELDS = [
+            "name", "lu_desc", "tag", "status", "first_lu_time", "last_lu_time",
+            "first_ld_time", "last_ld_time", "market_type", "up_stat", "rank"
+        ]
+
+        # 其他字段（未在配置中显式声明的，按默认逻辑处理）
+        other_cols = [
+            col for col in df_cleaned.columns
+            if col not in not_null_fields and col not in date_fields
+        ]
+
         for col in other_cols:
+            if col not in df_cleaned.columns:
+                continue
             dtype = df_cleaned[col].dtype
+
+            # ========== 修复1：整数字段强制转INT，空值填0（解决1366） ==========
+            if col in INTEGER_FIELDS:
+                # 先转数值（coerce无效值为NaN），再填0，最后转INT
+                df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="coerce").fillna(0).astype(np.int64)
+                continue
+
+            # ========== 修复2：浮点数字段精度控制（解决1265） ==========
+            if col in FLOAT_FIELDS:
+                # 转数值+填0+保留2位小数（适配MySQL单精度FLOAT）
+                df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="coerce").fillna(0)
+                # 限制2位小数，避免精度溢出
+                df_cleaned[col] = df_cleaned[col].round(2)
+                # 防止科学计数法（MySQL不兼容科学计数法插入）
+                df_cleaned[col] = df_cleaned[col].apply(lambda x: f"{x:.2f}").astype(float)
+                continue
+
+            # ========== 修复3：纯字符串字段空值填充（与建表默认值''对齐） ==========
+            if col in STRING_FIELDS:
+                df_cleaned[col] = df_cleaned[col].fillna("")
+                continue
+
+            # ========== 兜底逻辑：兼容未知字段 ==========
             if pd.api.types.is_numeric_dtype(dtype):
-                df_cleaned[col] = df_cleaned[col].fillna(0)
+                df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="coerce").fillna(0)
             elif pd.api.types.is_object_dtype(dtype):
-                # object 列可能是"字符串数字"（API 返 string，DB 存 INT/FLOAT）
-                # 尝试转数值；成功则填 0，否则才填 ""（真正的字符串列）
+                # 尝试转数值，能转则填0，否则填''
                 coerced = pd.to_numeric(df_cleaned[col], errors="coerce")
-                non_null = df_cleaned[col].notna()
-                if non_null.any() and coerced[non_null].notna().all():
-                    # 所有非空值均可转为数值 → 该列本质是数值列
+                if coerced.notna().any():
                     df_cleaned[col] = coerced.fillna(0)
                 else:
                     df_cleaned[col] = df_cleaned[col].fillna("")
-            # datetime 列保持 NaT，由 db_utils 层统一转 None
 
         return df_cleaned
 

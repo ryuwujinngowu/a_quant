@@ -219,6 +219,10 @@ class DataFetcher:
         Returns:
             指数日线DataFrame（空数据返回空DataFrame）
         """
+        if not ts_code or ts_code.strip() == "":
+            ts_code = "000001.SH"
+            logger.debug("ts_code未传入或为空值，自动使用默认值：上证指数（000001.SH）")
+
         params = _filter_empty_params({
             "ts_code": ts_code,
             "trade_date": trade_date,

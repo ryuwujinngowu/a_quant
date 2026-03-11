@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 def send_wechat_message(title, content):
     """
-    通过PushPlus向微信发送消息
+    通过PushPlu通过s向微信发送消息
     :param title: 消息标题（必填）
     :param content: 消息内容
     :return: 推送结果（True/False）
