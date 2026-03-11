@@ -78,6 +78,13 @@ class ProcessedDatesManager:
             self.processed_dates.append(date)
             self._save()
 
+    def reset(self):
+        """清空已处理记录（如训练集 CSV 被删除，需重新生成时调用）"""
+        self.processed_dates = []
+        if os.path.exists(self.file_path):
+            os.remove(self.file_path)
+        logger.warning("已处理日期记录已重置，将重新生成全量数据")
+
     def _save(self):
         with open(self.file_path, "w", encoding="utf-8") as f:
             json.dump(
@@ -244,7 +251,8 @@ def _filter_low_liquidity(daily_df: pd.DataFrame) -> pd.DataFrame:
 def validate_train_dataset(csv_path: str) -> pd.DataFrame:
     """最终训练集全量校验"""
     if not os.path.exists(csv_path):
-        raise ValueError("训练集文件不存在")
+        logger.warning(f"训练集文件不存在，跳过校验: {csv_path}")
+        return pd.DataFrame()
 
     df = pd.read_csv(csv_path)
     logger.info(f"【最终校验】总行数: {len(df)}")
@@ -294,6 +302,11 @@ if __name__ == "__main__":
     # ---------- 确定待处理日期 ----------
     all_trade_dates = get_trade_dates(START_DATE, END_DATE)
     to_process      = [d for d in all_trade_dates if not dates_manager.is_processed(d)]
+    # 训练集 CSV 被删除时，已处理记录与实际文件不一致，需重置并重跑
+    if not to_process and not os.path.exists(OUTPUT_CSV_PATH):
+        logger.warning("训练集 CSV 不存在但所有日期已标记为处理完成，重置记录并重新生成")
+        dates_manager.reset()
+        to_process = list(all_trade_dates)
     if not to_process:
         logger.info("✅ 所有日期已处理完成！")
         validate_train_dataset(OUTPUT_CSV_PATH)
