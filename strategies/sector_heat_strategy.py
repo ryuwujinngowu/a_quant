@@ -203,6 +203,8 @@ class SectorHeatStrategy(BaseStrategy):
             X = (
                 feature_df
                 .reindex(columns=expected_cols, fill_value=0)
+                # DB 返回的 Decimal/object 列在此强制转为 float（训练 CSV 读回是 float，推断时须对齐）
+                .apply(pd.to_numeric, errors="coerce")
                 .fillna(0)
                 .replace([np.inf, -np.inf], 0)
             )
