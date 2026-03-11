@@ -86,21 +86,23 @@ def update_stock_st_incremental(start_date: str, end_date: str) -> tuple:
 def update_kline_day_incremental(date_list: list) -> tuple:
     """
     增量更新日线数据（批量拉取 + 单股兜底重试）
-    :return: (is_success, total_affected_rows)
+    :return: (is_success, total_affected_rows, per_date_affected)
+             per_date_affected: {trade_date(YYYYMMDD): row_count}
              is_success 由调用方根据 MIN_KLINE_ROWS_PER_DAY 判定，此处只负责执行
     """
     if not date_list:
         logger.warning("kline_day 更新：日期列表为空，跳过")
-        return False, 0
+        return False, 0, {}
 
     logger.info(f"===== 增量更新日线数据（共 {len(date_list)} 个交易日） =====")
     stock_codes = db.get_all_a_stock_codes()
     if not stock_codes:
         logger.error("无有效股票代码，终止日线更新")
-        return False, 0
+        return False, 0, {}
 
-    BATCH_SIZE    = 600
+    BATCH_SIZE     = 600
     total_affected = 0
+    per_date_affected: dict = {}   # {date: row_count}
 
     for trade_date in date_list:
         daily_affected = 0
@@ -139,11 +141,12 @@ def update_kline_day_incremental(date_list: list) -> tuple:
                     except Exception as e2:
                         logger.error(f"{ts_code} {trade_date} 单股重试失败：{e2}")
 
+        per_date_affected[trade_date] = daily_affected
         logger.info(f"{trade_date} 日线更新完成，入库 {daily_affected} 行")
         total_affected += daily_affected
 
     logger.info(f"日线增量更新完成，累计入库 {total_affected} 行")
-    return True, total_affected
+    return True, total_affected, per_date_affected
 
 
 def update_index_daily(last_date: str) -> tuple:
@@ -181,13 +184,19 @@ def _build_push_msg(
     total: int,
     retry_count: int,
     inc_dates: list,
+    per_date_kline: dict = None,
+    record_written_to: str = None,
 ) -> str:
     """
     构造格式化的微信推送消息
-    对齐输出，方便在手机上阅读
+    per_date_kline: {YYYYMMDD: row_count}，用于逐日明细展示
+    record_written_to: 实际写入的 last_update_date（可能是部分成功的中间日期）
     """
     status   = "✅ 成功" if is_success else "❌ 异常/数据不完整"
-    rec_line = f"已更新为 {current_date}" if is_success else f"保留原记录 {last_date}"
+    rec_line = f"已更新为 {record_written_to or current_date}" if is_success else (
+        f"部分推进至 {record_written_to}" if record_written_to and record_written_to != last_date
+        else f"保留原记录 {last_date}"
+    )
 
     lines = [
         f"📅 更新日期：{current_date}",
@@ -201,6 +210,17 @@ def _build_push_msg(
         f"  index_daily  : {affected.get('index',       0):>6,} 行",
         f"  ─────────────────────",
         f"  合计         : {total:>6,} 行",
+    ]
+
+    # 逐日 kline 明细（多天补录时特别有用）
+    if per_date_kline and len(per_date_kline) > 1:
+        lines.append(f"")
+        lines.append(f"📋 kline 逐日明细：")
+        for d, cnt in per_date_kline.items():
+            flag = "✅" if cnt >= MIN_KLINE_ROWS_PER_DAY else "❌"
+            lines.append(f"  {d}: {cnt:>6,} 行 {flag}")
+
+    lines += [
         f"",
         f"📌 状态：{status}",
         f"🕐 记录：{rec_line}",
@@ -239,37 +259,54 @@ def startUpdating(retry_count: int = 1) -> tuple:
 
     success_flags["stock_basic"], affected["stock_basic"] = update_stock_basic()
     success_flags["stock_st"],    affected["stock_st"]    = update_stock_st_incremental(last_date, current_date)
-    success_flags["kline"],       affected["kline"]       = update_kline_day_incremental(inc_dates)
+    success_flags["kline"], affected["kline"], per_date_kline = update_kline_day_incremental(inc_dates)
     success_flags["index"],       affected["index"]       = update_index_daily(last_date)
 
     total = sum(affected.values())
     logger.info(f"各表入库行数：{affected}  合计：{total}")
 
-    # ---------- 成功判定 ----------
-    # 核心门槛：kline_day 必须执行成功 + 行数达到动态阈值
-    expected_min  = MIN_KLINE_ROWS_PER_DAY * max(len(inc_dates), 1)
-    kline_ok      = success_flags["kline"] and affected["kline"] >= expected_min
-    is_success    = kline_ok
+    # ---------- 成功判定（逐日检查，不能用聚合阈值代替）----------
+    # 逐日不足时，聚合行数可能虚假达标（如补2天：第1天9760行+第2天0行=9760≥8000，但今日缺数据）
+    fail_dates = [d for d in inc_dates if per_date_kline.get(d, 0) < MIN_KLINE_ROWS_PER_DAY]
+    ok_dates   = [d for d in inc_dates if d not in fail_dates]
 
-    if not kline_ok:
+    kline_ok   = success_flags["kline"] and not fail_dates
+    is_success = kline_ok
+
+    if fail_dates:
         logger.warning(
-            f"kline_day 入库行数 {affected['kline']} < 预期最低 {expected_min}"
-            f"（{MIN_KLINE_ROWS_PER_DAY} 行/天 × {len(inc_dates)} 天），判定更新不完整"
+            f"以下日期 kline 入库行数不足（< {MIN_KLINE_ROWS_PER_DAY} 行/天）：\n"
+            + "\n".join(f"  {d}: {per_date_kline.get(d, 0)} 行" for d in fail_dates)
         )
 
-    # ---------- 写入记录（仅成功时）----------
-    updated_tables = [k for k, v in success_flags.items() if v]
+    # ---------- 写入记录 ----------
+    updated_tables    = [k for k, v in success_flags.items() if v]
+    record_written_to = None
+
     if is_success:
+        # 全部日期成功：记录推进至今日
         write_update_record(current_date, updated_tables)
+        record_written_to = current_date
         logger.info(f"更新记录写入成功，时间更新为：{current_date}")
+    elif ok_dates:
+        # 部分日期成功：记录推进至最后一个成功日，避免下次重复拉已成功的历史日期
+        last_ok_yyyymmdd  = ok_dates[-1]
+        last_ok_str       = f"{last_ok_yyyymmdd[:4]}-{last_ok_yyyymmdd[4:6]}-{last_ok_yyyymmdd[6:]}"
+        write_update_record(last_ok_str, updated_tables)
+        record_written_to = last_ok_str
+        logger.warning(
+            f"部分日期成功，记录推进至 {last_ok_str}；"
+            f"失败日期 {fail_dates} 将在下次重试补录"
+        )
     else:
-        logger.warning(f"更新不完整，记录保留原值：{last_date}")
+        logger.warning(f"所有日期均未成功，记录保留原值：{last_date}")
 
     push_msg = _build_push_msg(
-        current_date, last_date, is_success, affected, total, retry_count, inc_dates
+        current_date, last_date, is_success, affected, total,
+        retry_count, inc_dates, per_date_kline, record_written_to,
     )
     logger.info(
-        f"===== 本次执行完成 | kline {affected['kline']} 行 | 预期 ≥{expected_min} 行 | 成功：{is_success} ====="
+        f"===== 本次执行完成 | kline 逐日 {per_date_kline} | 全部成功：{is_success} ====="
     )
     return is_success, push_msg
 
