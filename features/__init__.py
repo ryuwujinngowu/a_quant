@@ -24,6 +24,7 @@
     market_macro  → MarketMacroFeature（涨跌停 + 连板 + 最强板块 + 指数，全局因子）
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 import pandas as pd
 
@@ -67,28 +68,34 @@ class FeatureEngine:
 
     def run_single_date(self, data_bundle: FeatureDataBundle) -> pd.DataFrame:
         """
-        单日全量特征计算
+        单日全量特征计算（多线程并行调度各因子）
 
-        :param data_bundle: 预加载的数据容器
+        :param data_bundle: 预加载的数据容器（只读，线程安全）
         :return: stock_code + trade_date 为主键的特征 DataFrame
         """
         trade_date = data_bundle.trade_date
         stock_dfs: List[pd.DataFrame] = []   # 含 stock_code（个股级）
         global_dfs: List[pd.DataFrame] = []  # 不含 stock_code（全局级，如 adapt_score）
 
-        for feature in self.features:
-            try:
-                feature_df, _ = feature.calculate(data_bundle)
-                if feature_df.empty:
-                    self.logger.warning(f"[FeatureEngine] {feature.feature_name} 返回空 DataFrame，跳过")
-                    continue
-                if "stock_code" in feature_df.columns:
-                    stock_dfs.append(feature_df)
-                else:
-                    global_dfs.append(feature_df)
-            except Exception as e:
-                self.logger.error(f"[FeatureEngine] {feature.feature_name} 失败：{e}", exc_info=True)
-                return pd.DataFrame()
+        def _run_one(feature):
+            return feature.feature_name, feature.calculate(data_bundle)
+
+        with ThreadPoolExecutor(max_workers=len(self.features)) as pool:
+            futures = {pool.submit(_run_one, f): f for f in self.features}
+            for fut in as_completed(futures):
+                feature = futures[fut]
+                try:
+                    name, (feature_df, _) = fut.result()
+                    if feature_df.empty:
+                        self.logger.warning(f"[FeatureEngine] {name} 返回空 DataFrame，跳过")
+                        continue
+                    if "stock_code" in feature_df.columns:
+                        stock_dfs.append(feature_df)
+                    else:
+                        global_dfs.append(feature_df)
+                except Exception as e:
+                    self.logger.error(f"[FeatureEngine] {feature.feature_name} 失败：{e}", exc_info=True)
+                    return pd.DataFrame()
 
         if not stock_dfs:
             self.logger.warning(f"[FeatureEngine] {trade_date} 无个股级特征数据")

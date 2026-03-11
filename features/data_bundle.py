@@ -6,6 +6,7 @@
     2. 日线 / 分钟线各只发起一次 IO，因子内部禁止再自行拉数据
     3. load_minute=False 可跳过分钟线加载，适用于纯日线因子调试场景
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import List, Dict
 import pandas as pd
@@ -16,6 +17,9 @@ from utils.common_tools import (
 )
 from data.data_cleaner import data_cleaner
 from utils.log_utils import logger
+
+# 并发加载线程数（IO 密集型，可设较大值）
+_IO_WORKERS = 8
 
 
 class FeatureDataBundle:
@@ -80,15 +84,24 @@ class FeatureDataBundle:
             raise
 
     def _load_daily_data(self):
-        """批量加载日线（仅查候选股，不拉全市场）"""
+        """批量加载日线（仅查候选股，多线程并发拉取各日期数据）"""
         try:
             all_dates = list(set(self.lookback_dates_5d + self.lookback_dates_20d))
-            frames = []
-            for date in all_dates:
+
+            def _fetch_one(date):
                 df = get_daily_kline_data(trade_date=date, ts_code_list=self.target_ts_codes)
                 if not df.empty:
                     df["trade_date"] = df["trade_date"].astype(str)
-                    frames.append(df)
+                return df
+
+            frames = []
+            with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
+                futures = {pool.submit(_fetch_one, d): d for d in all_dates}
+                for fut in as_completed(futures):
+                    df = fut.result()
+                    if not df.empty:
+                        frames.append(df)
+
             if frames:
                 all_df = pd.concat(frames, ignore_index=True)
                 self.daily_grouped = (
@@ -122,12 +135,22 @@ class FeatureDataBundle:
             logger.warning(f"[DataBundle] 宏观数据加载异常（非致命）：{str(e)[:120]}")
 
     def _load_minute_data(self):
-        """加载候选股近 5 日分钟线（HDI/SEI 因子必需）"""
+        """加载候选股近 5 日分钟线（多线程并发，HDI/SEI 因子必需）"""
         try:
-            for ts_code in self.target_ts_codes:
-                for date in self.lookback_dates_5d:
-                    key = (ts_code, date)
-                    self.minute_cache[key] = data_cleaner.get_kline_min_by_stock_date(ts_code, date)
+            tasks = [
+                (ts_code, date)
+                for ts_code in self.target_ts_codes
+                for date in self.lookback_dates_5d
+            ]
+
+            def _fetch_one(pair):
+                ts_code, date = pair
+                return pair, data_cleaner.get_kline_min_by_stock_date(ts_code, date)
+
+            with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
+                for (ts_code, date), df in pool.map(_fetch_one, tasks):
+                    self.minute_cache[(ts_code, date)] = df
+
             logger.info(f"[DataBundle] 分钟线加载完成 | 记录数:{len(self.minute_cache)}")
         except Exception as e:
             logger.warning(f"[DataBundle] 分钟线加载异常（非致命）：{str(e)[:120]}")

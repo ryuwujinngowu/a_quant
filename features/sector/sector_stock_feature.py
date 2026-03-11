@@ -48,6 +48,7 @@
 """
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
 import numpy as np
@@ -61,6 +62,9 @@ from utils.common_tools import (
     calc_limit_up_price,
     calc_limit_down_price,
 )
+
+# SEI/HDI 并行计算线程数（numpy 释放 GIL，线程并发有效）
+_SEI_WORKERS = 6
 
 
 # ============================================================
@@ -197,43 +201,51 @@ class SectorStockFeature(BaseFeature):
             # ================================================================
             sei_cache: Dict[tuple, dict] = {}
 
+            # 收集需要计算 SEI/HDI 的任务
+            sei_tasks = []
+            seen_keys = set()
             for ts_code in sector_ts_codes:
                 for _, target_date in day_tag_map.items():
                     daily_key = (ts_code, target_date)
-                    if daily_key in sei_cache or daily_key not in daily_grouped:
+                    if daily_key in seen_keys or daily_key not in daily_grouped:
                         continue
-
+                    seen_keys.add(daily_key)
                     daily_row = daily_grouped[daily_key]
                     pre_close = daily_row.get("pre_close", 0)
                     if not pre_close or pre_close <= 0:
                         continue
+                    sei_tasks.append((daily_key, daily_row, pre_close))
 
-                    up_limit   = calc_limit_up_price(ts_code, pre_close)
-                    down_limit = calc_limit_down_price(ts_code, pre_close)
-                    minute_df  = minute_cache.get(daily_key, pd.DataFrame())
+            # 单任务 SEI/HDI 计算（纯 CPU + numpy，释放 GIL，线程安全）
+            sei_calc = self.sei_calculator
 
-                    hdi, factors = self.sei_calculator._calculate_minute_hdi(
-                        minute_df, pre_close, up_limit, down_limit
+            def _compute_sei(task):
+                daily_key, daily_row, pre_close = task
+                ts_code = daily_key[0]
+                up_limit   = calc_limit_up_price(ts_code, pre_close)
+                down_limit = calc_limit_down_price(ts_code, pre_close)
+                minute_df  = minute_cache.get(daily_key, pd.DataFrame())
+
+                hdi, factors = sei_calc._calculate_minute_hdi(
+                    minute_df, pre_close, up_limit, down_limit
+                )
+                if factors:
+                    sei = sei_calc._factors_to_sei(factors, up_limit)
+                else:
+                    sei = hdi = 50.0
+                    factors = SEIFeature.calc_daily_atomic(
+                        open_price  = daily_row.get("open",  pre_close),
+                        high_price  = daily_row.get("high",  pre_close),
+                        low_price   = daily_row.get("low",   pre_close),
+                        close_price = daily_row.get("close", pre_close),
+                        pre_close   = pre_close,
                     )
+                return daily_key, {"sei": float(sei), "hdi": float(hdi), "factors": factors}
 
-                    if factors:
-                        sei = self.sei_calculator._factors_to_sei(factors, up_limit)
-                    else:
-                        # 无分钟线：从日线 OHLC 回退
-                        sei = hdi = 50.0
-                        factors = SEIFeature.calc_daily_atomic(
-                            open_price  = daily_row.get("open",  pre_close),
-                            high_price  = daily_row.get("high",  pre_close),
-                            low_price   = daily_row.get("low",   pre_close),
-                            close_price = daily_row.get("close", pre_close),
-                            pre_close   = pre_close,
-                        )
-
-                    sei_cache[daily_key] = {
-                        "sei":     float(sei),
-                        "hdi":     float(hdi),
-                        "factors": factors,
-                    }
+            # 多线程并行计算 SEI/HDI
+            with ThreadPoolExecutor(max_workers=_SEI_WORKERS) as pool:
+                for key, result in pool.map(_compute_sei, sei_tasks):
+                    sei_cache[key] = result
 
             # ---- 板块每日赚钱/亏钱效应 ----
             sector_day_factors: Dict[str, dict] = {}
