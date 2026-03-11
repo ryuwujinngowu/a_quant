@@ -827,7 +827,7 @@ def get_market_total_volume(dates: List[str]) -> pd.DataFrame:
     dates_fmt = [d.replace("-", "") for d in dates]
     placeholders = ", ".join(["%s"] * len(dates_fmt))
     sql = f"""
-          SELECT trade_date, SUM(vol) AS market_total_vol
+          SELECT trade_date, SUM(amount) AS market_total_vol
           FROM kline_day
           WHERE trade_date IN ({placeholders})
           GROUP BY trade_date

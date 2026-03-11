@@ -140,6 +140,6 @@ class MarketMacroFeature(BaseFeature):
             f"跌停:{row['market_limit_down_count']} "
             f"最高板:{row['market_max_consec_num']} "
             f"上证:{row['index_sh_pct_chg']:.2f}% "
-            f"全市场成交量(d0):{row['market_total_vol_d0']:.0f}"
+            f"全市场成交量(d0)單位(千元):{row['market_total_vol_d0']:.0f}"
         )
         return feature_df, {}
