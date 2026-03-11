@@ -14,6 +14,7 @@ import pandas as pd
 from utils.common_tools import (
     get_trade_dates, get_daily_kline_data,
     get_limit_list_ths, get_limit_step, get_limit_cpt_list, get_index_daily,
+    get_market_total_volume,
 )
 from data.data_cleaner import data_cleaner
 from utils.log_utils import logger
@@ -123,13 +124,15 @@ class FeatureDataBundle:
             self.macro_cache["index_df"]      = get_index_daily(
                 td, ts_code_list=["000001.SH", "399001.SZ", "399006.SZ"]
             )
+            self.macro_cache["market_vol_df"] = get_market_total_volume(self.lookback_dates_5d)
             logger.info(
                 f"[DataBundle] 宏观数据加载完成 | "
                 f"涨停:{len(self.macro_cache['limit_up_df'])} "
                 f"跌停:{len(self.macro_cache['limit_down_df'])} "
                 f"连板:{len(self.macro_cache['limit_step_df'])} "
                 f"板块:{len(self.macro_cache['limit_cpt_df'])} "
-                f"指数:{len(self.macro_cache['index_df'])}"
+                f"指数:{len(self.macro_cache['index_df'])} "
+                f"市场成交量:{len(self.macro_cache['market_vol_df'])}"
             )
         except Exception as e:
             logger.warning(f"[DataBundle] 宏观数据加载异常（非致命）：{str(e)[:120]}")

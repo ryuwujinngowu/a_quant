@@ -57,6 +57,9 @@ class MarketMacroFeature(BaseFeature):
         "market_top_cpt_up_nums", "market_top_cpt_cons_nums",
         # 指数
         "index_sh_pct_chg", "index_sz_pct_chg", "index_cyb_pct_chg",
+        # 全市场成交量（d0=当日，d1~d4=前4个交易日）
+        "market_total_vol_d0", "market_total_vol_d1", "market_total_vol_d2",
+        "market_total_vol_d3", "market_total_vol_d4",
     ]
 
     def calculate(self, data_bundle) -> tuple:
@@ -109,11 +112,34 @@ class MarketMacroFeature(BaseFeature):
         for ts_code, col_name in INDEX_CODES.items():
             row[col_name] = float(idx_map.get(ts_code, 0) or 0)
 
+        # ========== 全市场成交量维度（d0=当日，d1~d4=前4个交易日）==========
+        market_vol_df   = macro_cache.get("market_vol_df", pd.DataFrame())
+        lookback_5d     = getattr(data_bundle, "lookback_dates_5d", [])
+        # kline_day 中 trade_date 存储为 YYYYMMDD，lookback_dates_5d 为 YYYY-MM-DD
+        if not market_vol_df.empty and "trade_date" in market_vol_df.columns and lookback_5d:
+            vol_map = {
+                str(r["trade_date"]).replace("-", ""): float(r.get("market_total_vol", 0) or 0)
+                for _, r in market_vol_df.iterrows()
+            }
+            # lookback_5d 按升序排列，最后一个为 D 日（d0），往前为 d1、d2…
+            for di in range(5):
+                col = f"market_total_vol_d{di}"
+                idx = len(lookback_5d) - 1 - di   # d0 → 最后一个, d4 → 第一个
+                if 0 <= idx < len(lookback_5d):
+                    date_key = lookback_5d[idx].replace("-", "")
+                    row[col] = vol_map.get(date_key, 0)
+                else:
+                    row[col] = 0
+        else:
+            for di in range(5):
+                row[f"market_total_vol_d{di}"] = 0
+
         feature_df = pd.DataFrame([row])
         logger.info(
             f"[市场宏观] {trade_date} 涨停:{row['market_limit_up_count']} "
             f"跌停:{row['market_limit_down_count']} "
             f"最高板:{row['market_max_consec_num']} "
-            f"上证:{row['index_sh_pct_chg']:.2f}%"
+            f"上证:{row['index_sh_pct_chg']:.2f}% "
+            f"全市场成交量(d0):{row['market_total_vol_d0']:.0f}"
         )
         return feature_df, {}

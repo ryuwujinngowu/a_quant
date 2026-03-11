@@ -816,6 +816,31 @@ def get_index_daily(trade_date: str, ts_code_list: List[str] = None) -> pd.DataF
         return pd.DataFrame()
 
 
+def get_market_total_volume(dates: List[str]) -> pd.DataFrame:
+    """
+    批量查询多个交易日的全市场成交量（DB 侧 GROUP BY 聚合，比代码侧汇总快得多）
+    :param dates: 交易日列表，格式 yyyy-mm-dd
+    :return: DataFrame，列：trade_date(yyyymmdd), market_total_vol
+    """
+    if not dates:
+        return pd.DataFrame(columns=["trade_date", "market_total_vol"])
+    dates_fmt = [d.replace("-", "") for d in dates]
+    placeholders = ", ".join(["%s"] * len(dates_fmt))
+    sql = f"""
+          SELECT trade_date, SUM(vol) AS market_total_vol
+          FROM kline_day
+          WHERE trade_date IN ({placeholders})
+          GROUP BY trade_date
+          """
+    try:
+        df = db.query(sql, params=tuple(dates_fmt), return_df=True)
+        logger.debug(f"[全市场成交量] 查询完成 | 日期数:{len(dates)} | 返回行数:{len(df)}")
+        return df if df is not None else pd.DataFrame(columns=["trade_date", "market_total_vol"])
+    except Exception as e:
+        logger.error(f"[全市场成交量] 查询失败: {e}")
+        return pd.DataFrame(columns=["trade_date", "market_total_vol"])
+
+
 def get_stocks_in_sector(sector_name: str) -> List[str]:
     """
     【通用工具】从stock_basic表查询指定板块/概念对应的所有股票代码
