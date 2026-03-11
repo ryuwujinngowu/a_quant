@@ -10,7 +10,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict
 import pandas as pd
 
-from utils.common_tools import get_trade_dates, get_daily_kline_data
+from utils.common_tools import (
+    get_trade_dates, get_daily_kline_data,
+    get_limit_list_ths, get_limit_step, get_limit_cpt_list, get_index_daily,
+)
 from data.data_cleaner import data_cleaner
 from utils.log_utils import logger
 
@@ -34,6 +37,7 @@ class FeatureDataBundle:
         daily_grouped       : dict，key=(ts_code, trade_date)，value=该行日线数据 dict
                               O(1) 查找，是所有因子计算的核心加速手段
         minute_cache        : dict，key=(ts_code, trade_date)，value=分钟线 DataFrame
+        macro_cache         : dict，预加载的宏观数据（涨跌停池/连板/最强板块/指数日线）
     """
 
     def __init__(
@@ -55,9 +59,11 @@ class FeatureDataBundle:
         self.lookback_dates_20d: List[str] = []
         self.daily_grouped: Dict[tuple, dict] = {}
         self.minute_cache: Dict[tuple, pd.DataFrame] = {}
+        self.macro_cache: Dict[str, pd.DataFrame] = {}
 
         self._load_trade_dates()
         self._load_daily_data()
+        self._load_macro_data()
         if load_minute:
             self._load_minute_data()
 
@@ -92,6 +98,28 @@ class FeatureDataBundle:
         except Exception as e:
             logger.error(f"[DataBundle] 日线数据加载失败：{e}")
             raise
+
+    def _load_macro_data(self):
+        """预加载 D 日市场宏观数据（涨跌停池 / 连板天梯 / 最强板块 / 指数日线）"""
+        try:
+            td = self.trade_date
+            self.macro_cache["limit_up_df"]   = get_limit_list_ths(td, limit_type="涨停池")
+            self.macro_cache["limit_down_df"] = get_limit_list_ths(td, limit_type="跌停池")
+            self.macro_cache["limit_step_df"] = get_limit_step(td)
+            self.macro_cache["limit_cpt_df"]  = get_limit_cpt_list(td)
+            self.macro_cache["index_df"]      = get_index_daily(
+                td, ts_code_list=["000001.SH", "399001.SZ", "399006.SZ"]
+            )
+            logger.info(
+                f"[DataBundle] 宏观数据加载完成 | "
+                f"涨停:{len(self.macro_cache['limit_up_df'])} "
+                f"跌停:{len(self.macro_cache['limit_down_df'])} "
+                f"连板:{len(self.macro_cache['limit_step_df'])} "
+                f"板块:{len(self.macro_cache['limit_cpt_df'])} "
+                f"指数:{len(self.macro_cache['index_df'])}"
+            )
+        except Exception as e:
+            logger.warning(f"[DataBundle] 宏观数据加载异常（非致命）：{str(e)[:120]}")
 
     def _load_minute_data(self):
         """加载候选股近 5 日分钟线（HDI/SEI 因子必需）"""

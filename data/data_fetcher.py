@@ -445,6 +445,127 @@ class DataFetcher:
             logger.error(f"同花顺热榜数据获取失败，参数：{params}，错误：{str(e)}")
             return pd.DataFrame()
 
+    def fetch_limit_list_ths(
+            self,
+            trade_date: Optional[str] = None,
+            ts_code: Optional[str] = None,
+            limit_type: Optional[str] = None,
+            market: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取涨跌停池数据（同花顺 limit_list_ths 接口）
+        接口文档：https://tushare.pro/document/2?doc_id=XXX
+
+        Args:
+            trade_date: 交易日期（YYYYMMDD）
+            ts_code: 股票代码
+            limit_type: 涨停池/连扳池/冲刺涨停/炸板池/跌停池，默认涨停池
+            market: HS-沪深主板 GEM-创业板 STAR-科创板
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            涨跌停池 DataFrame（空数据返回空 DataFrame）
+        """
+        params = _filter_empty_params({
+            "trade_date": trade_date,
+            "ts_code": ts_code,
+            "limit_type": limit_type,
+            "market": market,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+
+        try:
+            time.sleep(API_REQUEST_INTERVAL)
+            df = self.pro.limit_list_ths(**params)
+            logger.debug(f"涨跌停池数据获取，参数：{params}，行数：{len(df)}")
+            if df.empty:
+                logger.debug(f"涨跌停池数据为空，参数：{params}")
+            return df
+        except Exception as e:
+            logger.error(f"涨跌停池数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+    def fetch_limit_step(
+            self,
+            trade_date: Optional[str] = None,
+            ts_code: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            nums: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取涨停连板天梯数据（limit_step 接口）
+
+        Args:
+            trade_date: 交易日期（YYYYMMDD）
+            ts_code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            nums: 连板次数，支持多个输入如 nums='2,3'
+
+        Returns:
+            连板天梯 DataFrame（空数据返回空 DataFrame）
+        """
+        params = _filter_empty_params({
+            "trade_date": trade_date,
+            "ts_code": ts_code,
+            "start_date": start_date,
+            "end_date": end_date,
+            "nums": nums,
+        })
+
+        try:
+            time.sleep(API_REQUEST_INTERVAL)
+            df = self.pro.limit_step(**params)
+            logger.debug(f"连板天梯数据获取，参数：{params}，行数：{len(df)}")
+            if df.empty:
+                logger.debug(f"连板天梯数据为空，参数：{params}")
+            return df
+        except Exception as e:
+            logger.error(f"连板天梯数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
+    def fetch_limit_cpt_list(
+            self,
+            trade_date: Optional[str] = None,
+            ts_code: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        获取最强板块数据（limit_cpt_list 接口）
+
+        Args:
+            trade_date: 交易日期（YYYYMMDD）
+            ts_code: 板块代码
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            最强板块 DataFrame（空数据返回空 DataFrame）
+        """
+        params = _filter_empty_params({
+            "trade_date": trade_date,
+            "ts_code": ts_code,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
+
+        try:
+            time.sleep(API_REQUEST_INTERVAL)
+            df = self.pro.limit_cpt_list(**params)
+            logger.debug(f"最强板块数据获取，参数：{params}，行数：{len(df)}")
+            if df.empty:
+                logger.debug(f"最强板块数据为空，参数：{params}")
+            return df
+        except Exception as e:
+            logger.error(f"最强板块数据获取失败，参数：{params}，错误：{str(e)}")
+            return pd.DataFrame()
+
     def fetch_stock_st(
             self,
             ts_code: Optional[str] = None,

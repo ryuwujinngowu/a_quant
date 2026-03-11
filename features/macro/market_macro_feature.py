@@ -1,0 +1,119 @@
+"""
+当日市场宏观因子
+================
+输出列（全部为 D 日截面，全局级因子，无 stock_code 列）：
+
+【涨跌停维度】
+  market_limit_up_count     : D 日涨停池股票数量
+  market_limit_down_count   : D 日跌停池股票数量
+
+【连板维度】
+  market_max_consec_num     : D 日最高连板数（市场高度）
+  market_consec_2plus_count : D 日 2 板及以上股票数量（连板梯队宽度）
+
+【最强板块维度】
+  market_top_cpt_up_nums    : D 日最强板块涨停家数（榜首）
+  market_top_cpt_cons_nums  : D 日最强板块连板家数（榜首）
+
+【指数维度】
+  index_sh_pct_chg          : D 日上证指数涨跌幅
+  index_sz_pct_chg          : D 日深证成指涨跌幅
+  index_cyb_pct_chg         : D 日创业板指涨跌幅
+
+设计说明：
+    - 本模块输出全局级（无 stock_code），由 FeatureEngine 通过 left join 广播到所有个股行
+    - 数据来源：limit_list_ths / limit_step / limit_cpt_list / index_daily 四张表
+    - 依赖 data_bundle.macro_cache（由 FeatureDataBundle 在初始化时预加载）
+    - 后续可在此文件中继续新增其他宏观维度因子（如融资融券余额、北向资金等）
+"""
+from typing import Dict
+import pandas as pd
+
+from features.base_feature import BaseFeature
+from features.feature_registry import feature_registry
+from utils.log_utils import logger
+
+
+# 关注的核心指数代码
+INDEX_CODES = {
+    "000001.SH": "index_sh_pct_chg",    # 上证指数
+    "399001.SZ": "index_sz_pct_chg",    # 深证成指
+    "399006.SZ": "index_cyb_pct_chg",   # 创业板指
+}
+
+
+@feature_registry.register("market_macro")
+class MarketMacroFeature(BaseFeature):
+    """当日市场宏观因子"""
+
+    feature_name = "market_macro"
+
+    factor_columns = [
+        # 涨跌停
+        "market_limit_up_count", "market_limit_down_count",
+        # 连板
+        "market_max_consec_num", "market_consec_2plus_count",
+        # 最强板块
+        "market_top_cpt_up_nums", "market_top_cpt_cons_nums",
+        # 指数
+        "index_sh_pct_chg", "index_sz_pct_chg", "index_cyb_pct_chg",
+    ]
+
+    def calculate(self, data_bundle) -> tuple:
+        """
+        从 data_bundle.macro_cache 读取预加载数据，计算宏观因子
+
+        :return: (feature_df, factor_dict)
+                 feature_df：单行 DataFrame，列 = trade_date + factor_columns
+                 factor_dict：兼容接口，空 dict
+        """
+        trade_date  = data_bundle.trade_date
+        macro_cache = getattr(data_bundle, "macro_cache", {})
+
+        row = {"trade_date": trade_date}
+
+        # ========== 涨跌停维度 ==========
+        limit_up_df   = macro_cache.get("limit_up_df",   pd.DataFrame())
+        limit_down_df = macro_cache.get("limit_down_df", pd.DataFrame())
+        row["market_limit_up_count"]   = len(limit_up_df)
+        row["market_limit_down_count"] = len(limit_down_df)
+
+        # ========== 连板维度 ==========
+        limit_step_df = macro_cache.get("limit_step_df", pd.DataFrame())
+        if not limit_step_df.empty and "nums" in limit_step_df.columns:
+            nums_series = pd.to_numeric(limit_step_df["nums"], errors="coerce").dropna()
+            row["market_max_consec_num"]     = int(nums_series.max()) if len(nums_series) > 0 else 0
+            row["market_consec_2plus_count"] = int((nums_series >= 2).sum())
+        else:
+            row["market_max_consec_num"]     = 0
+            row["market_consec_2plus_count"] = 0
+
+        # ========== 最强板块维度 ==========
+        limit_cpt_df = macro_cache.get("limit_cpt_df", pd.DataFrame())
+        if not limit_cpt_df.empty:
+            # 取排名第一的板块
+            top_row = limit_cpt_df.iloc[0]
+            row["market_top_cpt_up_nums"]   = int(top_row.get("up_nums",   0) or 0)
+            row["market_top_cpt_cons_nums"] = int(top_row.get("cons_nums", 0) or 0)
+        else:
+            row["market_top_cpt_up_nums"]   = 0
+            row["market_top_cpt_cons_nums"] = 0
+
+        # ========== 指数维度 ==========
+        index_df = macro_cache.get("index_df", pd.DataFrame())
+        if not index_df.empty and "ts_code" in index_df.columns:
+            idx_map = {r["ts_code"]: r.get("pct_chg", 0) for _, r in index_df.iterrows()}
+        else:
+            idx_map = {}
+
+        for ts_code, col_name in INDEX_CODES.items():
+            row[col_name] = float(idx_map.get(ts_code, 0) or 0)
+
+        feature_df = pd.DataFrame([row])
+        logger.info(
+            f"[市场宏观] {trade_date} 涨停:{row['market_limit_up_count']} "
+            f"跌停:{row['market_limit_down_count']} "
+            f"最高板:{row['market_max_consec_num']} "
+            f"上证:{row['index_sh_pct_chg']:.2f}%"
+        )
+        return feature_df, {}

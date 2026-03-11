@@ -738,6 +738,84 @@ def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
 
 
 
+def get_limit_list_ths(trade_date: str, limit_type: str = None) -> pd.DataFrame:
+    """
+    查询指定日期的涨跌停池数据
+    :param trade_date: 交易日，格式 yyyy-mm-dd
+    :param limit_type: 板单类别（涨停池/跌停池/炸板池等），不传返回全部
+    :return: DataFrame
+    """
+    sql = "SELECT * FROM limit_list_ths WHERE trade_date = %s"
+    params = [trade_date]
+    if limit_type:
+        sql += " AND limit_type = %s"
+        params.append(limit_type)
+
+    try:
+        df = db.query(sql, params=tuple(params), return_df=True)
+        logger.debug(f"[涨跌停池] {trade_date} type={limit_type} 行数:{len(df)}")
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[涨跌停池] 查询失败: {e}")
+        return pd.DataFrame()
+
+
+def get_limit_step(trade_date: str) -> pd.DataFrame:
+    """
+    查询指定日期的连板天梯数据
+    :param trade_date: 交易日，格式 yyyy-mm-dd
+    :return: DataFrame（含 ts_code, name, nums）
+    """
+    sql = "SELECT * FROM limit_step WHERE trade_date = %s ORDER BY nums DESC"
+    try:
+        df = db.query(sql, params=(trade_date,), return_df=True)
+        logger.debug(f"[连板天梯] {trade_date} 行数:{len(df)}")
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[连板天梯] 查询失败: {e}")
+        return pd.DataFrame()
+
+
+def get_limit_cpt_list(trade_date: str) -> pd.DataFrame:
+    """
+    查询指定日期的最强板块数据
+    :param trade_date: 交易日，格式 yyyy-mm-dd
+    :return: DataFrame（含 ts_code, name, days, up_stat, cons_nums, up_nums, pct_chg, rank）
+    """
+    sql = "SELECT * FROM limit_cpt_list WHERE trade_date = %s"
+    try:
+        df = db.query(sql, params=(trade_date,), return_df=True)
+        logger.debug(f"[最强板块] {trade_date} 行数:{len(df)}")
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[最强板块] 查询失败: {e}")
+        return pd.DataFrame()
+
+
+def get_index_daily(trade_date: str, ts_code_list: List[str] = None) -> pd.DataFrame:
+    """
+    查询指定日期的指数日线数据
+    :param trade_date: 交易日，格式 yyyy-mm-dd 或 yyyymmdd
+    :param ts_code_list: 指定指数代码列表，不传返回全部
+    :return: DataFrame
+    """
+    trade_date_fmt = trade_date.replace("-", "")
+    if ts_code_list:
+        sql = "SELECT * FROM index_daily WHERE trade_date = %s AND ts_code IN %s"
+        params = (trade_date_fmt, tuple(ts_code_list))
+    else:
+        sql = "SELECT * FROM index_daily WHERE trade_date = %s"
+        params = (trade_date_fmt,)
+
+    try:
+        df = db.query(sql, params=params, return_df=True)
+        logger.debug(f"[指数日线] {trade_date} 行数:{len(df)}")
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[指数日线] 查询失败: {e}")
+        return pd.DataFrame()
+
+
 def get_stocks_in_sector(sector_name: str) -> List[str]:
     """
     【通用工具】从stock_basic表查询指定板块/概念对应的所有股票代码

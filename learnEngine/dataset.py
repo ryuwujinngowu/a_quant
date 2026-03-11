@@ -30,6 +30,7 @@ from config.config import FILTER_BSE_STOCK, FILTER_STAR_BOARD, FILTER_688_BOARD
 from data.data_cleaner import data_cleaner
 from features import FeatureEngine, FeatureDataBundle
 from features.sector.sector_heat_feature import SectorHeatFeature
+from learnEngine.label import LabelEngine
 from utils.common_tools import (
     get_stocks_in_sector,
     filter_st_stocks,
@@ -84,65 +85,6 @@ class ProcessedDatesManager:
                  "processed_dates": sorted(self.processed_dates)},
                 f, ensure_ascii=False, indent=2
             )
-
-
-# ============================================================
-# 标签引擎
-# ============================================================
-
-class LabelEngine:
-    """生成 D+1 / D+2 标签"""
-
-    def __init__(self, start_date: str, end_date: str):
-        self.start_date = start_date
-        self.end_date   = end_date
-        label_end       = (pd.to_datetime(end_date) + timedelta(days=5)).strftime("%Y-%m-%d")
-        self.all_trade_dates = get_trade_dates(start_date, label_end)
-        self.date_idx_map    = {d: i for i, d in enumerate(self.all_trade_dates)}
-
-    def generate_single_date(self, trade_date: str, stock_list: List[str]) -> pd.DataFrame:
-        """
-        生成单日标签
-
-        label1 : D+1 收盘涨跌幅 ≥ 5% → 1，否则 0
-        label2 : D+2 开盘 > D+1 收盘（高开）→ 1，否则 0
-        """
-        if trade_date not in self.date_idx_map:
-            return pd.DataFrame()
-
-        idx = self.date_idx_map[trade_date]
-        if idx + 2 >= len(self.all_trade_dates):
-            return pd.DataFrame()
-
-        d1_date = self.all_trade_dates[idx + 1]
-        d2_date = self.all_trade_dates[idx + 2]
-
-        frames = []
-        for date in [trade_date, d1_date, d2_date]:
-            df = get_daily_kline_data(trade_date=date, ts_code_list=stock_list)
-            if not df.empty:
-                df["trade_date"] = df["trade_date"].astype(str)
-                frames.append(df)
-
-        if not frames:
-            return pd.DataFrame()
-
-        all_df = pd.concat(frames, ignore_index=True)
-        rows   = []
-        for ts_code in stock_list:
-            s   = all_df[all_df["ts_code"] == ts_code]
-            d0r = s[s["trade_date"] == trade_date]
-            d1r = s[s["trade_date"] == d1_date]
-            d2r = s[s["trade_date"] == d2_date]
-            if d0r.empty or d1r.empty or d2r.empty:
-                continue
-
-            label1 = 1 if d1r["pct_chg"].iloc[0] >= 5.0 else 0
-            label2 = 1 if d2r["open"].iloc[0] > d1r["close"].iloc[0] else 0
-            rows.append({"stock_code": ts_code, "trade_date": trade_date,
-                         "label1": label1, "label2": label2})
-
-        return pd.DataFrame(rows)
 
 
 # ============================================================
@@ -248,6 +190,57 @@ def _check_stock_has_limit_up(
     return result
 
 
+def _filter_limit_up_on_d0(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    过滤 D 日涨停封板的股票（收盘价 == 涨停价，买不进去）
+    :param daily_df: D 日候选股日线 DataFrame（含 ts_code, pre_close, close）
+    :return: 过滤后的 DataFrame
+    """
+    if daily_df.empty:
+        return daily_df
+
+    keep_mask = []
+    for _, row in daily_df.iterrows():
+        ts_code   = row["ts_code"]
+        pre_close = row.get("pre_close", 0)
+        close     = row.get("close", 0)
+        if pre_close <= 0 or close <= 0:
+            keep_mask.append(True)  # 数据异常，保守保留
+            continue
+        limit_up = calc_limit_up_price(ts_code, pre_close)
+        if limit_up > 0 and close >= limit_up - 0.01:
+            keep_mask.append(False)  # D 日涨停封板，过滤
+        else:
+            keep_mask.append(True)
+
+    filtered = daily_df[keep_mask].copy()
+    removed  = len(daily_df) - len(filtered)
+    if removed > 0:
+        logger.info(f"[D日涨停过滤] 过滤涨停封板股: {removed} 只")
+    return filtered
+
+
+# 低流动性过滤阈值（成交额，单位：万元；tushare amount 单位为千元）
+MIN_AMOUNT_THRESHOLD = 10000  # 1000万元 = 10000千元
+
+
+def _filter_low_liquidity(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    过滤成交额极低的股票（策略买不进去，加入训练集只会引入噪声）
+    :param daily_df: D 日候选股日线 DataFrame（含 amount 列，单位千元）
+    :return: 过滤后的 DataFrame
+    """
+    if daily_df.empty or "amount" not in daily_df.columns:
+        return daily_df
+
+    before = len(daily_df)
+    filtered = daily_df[daily_df["amount"] >= MIN_AMOUNT_THRESHOLD].copy()
+    removed = before - len(filtered)
+    if removed > 0:
+        logger.info(f"[低流动性过滤] 过滤成交额 < {MIN_AMOUNT_THRESHOLD}千元股: {removed} 只")
+    return filtered
+
+
 def validate_train_dataset(csv_path: str) -> pd.DataFrame:
     """最终训练集全量校验"""
     if not os.path.exists(csv_path):
@@ -289,7 +282,7 @@ if __name__ == "__main__":
     OUTPUT_CSV_PATH       = os.path.join(os.getcwd(), "train_dataset.csv")
     PROCESSED_DATES_FILE  = "processed_dates.json"
     # 因子逻辑有变更（新增列、修改计算公式）时必须更新版本号，否则旧数据不会重跑
-    FACTOR_VERSION        = "v2.0_candle_type"
+    FACTOR_VERSION        = "v3.0_label_fix_macro"
     # =====================================================
 
     # ---------- 初始化核心组件 ----------
@@ -327,12 +320,20 @@ if __name__ == "__main__":
                 logger.warning(f"{date} Top3 板块为空，跳过")
                 continue
 
-            # ---- Step 2: ST 数据入库 ----
+            # ---- Step 2: ST + 宏观数据入库 ----
+            date_fmt = date.replace("-", "")
             try:
-                data_cleaner.insert_stock_st(trade_date=date.replace("-", ""))
-                logger.info(f"{date} ST 数据入库完成")
+                data_cleaner.insert_stock_st(trade_date=date_fmt)
             except Exception as e:
                 logger.error(f"{date} ST 数据入库失败: {e}", exc_info=True)
+            try:
+                data_cleaner.clean_and_insert_limit_list_ths(trade_date=date_fmt, limit_type="涨停池")
+                data_cleaner.clean_and_insert_limit_list_ths(trade_date=date_fmt, limit_type="跌停池")
+                data_cleaner.clean_and_insert_limit_step(trade_date=date_fmt)
+                data_cleaner.clean_and_insert_limit_cpt_list(trade_date=date_fmt)
+                data_cleaner.clean_and_insert_index_daily(trade_date=date_fmt)
+            except Exception as e:
+                logger.error(f"{date} 宏观数据入库失败: {e}", exc_info=True)
 
             # ---- Step 3: 构建板块候选池 ----
             daily_df          = get_daily_kline_data(date)   # 当日全市场日线（预取，后续复用）
@@ -371,7 +372,15 @@ if __name__ == "__main__":
                     candidates   = sector_daily["ts_code"].unique().tolist()
                     limit_up_map = _check_stock_has_limit_up(candidates, date, day_count=10)
                     keep         = [ts for ts, has in limit_up_map.items() if has]
-                    sector_candidate_map[sector] = sector_daily[sector_daily["ts_code"].isin(keep)]
+                    sector_daily = sector_daily[sector_daily["ts_code"].isin(keep)]
+
+                    # D 日涨停封板过滤（收盘价==涨停价，买不进去）
+                    sector_daily = _filter_limit_up_on_d0(sector_daily)
+
+                    # 低流动性过滤
+                    sector_daily = _filter_low_liquidity(sector_daily)
+
+                    sector_candidate_map[sector] = sector_daily
                     logger.info(f"[{sector}] 最终候选股: {len(sector_candidate_map[sector])}")
 
                 except Exception as e:

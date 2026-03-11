@@ -684,6 +684,98 @@ class DataCleaner:
     #         logger.error(f"每日交易详情入库失败：{str(e)}", exc_info=True)
     #         return None
 
+    def clean_and_insert_limit_list_ths(
+            self,
+            trade_date: Optional[str] = None,
+            limit_type: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            table_name: str = "limit_list_ths"
+    ) -> Optional[int]:
+        """涨跌停池数据清洗入库"""
+        logger.info(f"===== 开始涨跌停池数据入库 | trade_date={trade_date} limit_type={limit_type} =====")
+
+        raw_df = data_fetcher.fetch_limit_list_ths(
+            trade_date=trade_date, limit_type=limit_type,
+            start_date=start_date, end_date=end_date
+        )
+        if raw_df.empty:
+            logger.debug("涨跌停池原始数据为空，跳过入库")
+            return 0
+
+        cleaned_df = self._clean_special_fields(raw_df)
+        if cleaned_df.empty:
+            return 0
+
+        final_df = self._align_df_with_db(cleaned_df, table_name)
+        try:
+            affected_rows = db.batch_insert_df(df=final_df, table_name=table_name, ignore_duplicate=True)
+            logger.info(f"涨跌停池入库完成 | 影响行数：{affected_rows}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"涨跌停池入库失败：{str(e)}", exc_info=True)
+            return None
+
+    def clean_and_insert_limit_step(
+            self,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            table_name: str = "limit_step"
+    ) -> Optional[int]:
+        """连板天梯数据清洗入库"""
+        logger.info(f"===== 开始连板天梯数据入库 | trade_date={trade_date} =====")
+
+        raw_df = data_fetcher.fetch_limit_step(
+            trade_date=trade_date, start_date=start_date, end_date=end_date
+        )
+        if raw_df.empty:
+            logger.debug("连板天梯原始数据为空，跳过入库")
+            return 0
+
+        cleaned_df = self._clean_special_fields(raw_df)
+        if cleaned_df.empty:
+            return 0
+
+        final_df = self._align_df_with_db(cleaned_df, table_name)
+        try:
+            affected_rows = db.batch_insert_df(df=final_df, table_name=table_name, ignore_duplicate=True)
+            logger.info(f"连板天梯入库完成 | 影响行数：{affected_rows}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"连板天梯入库失败：{str(e)}", exc_info=True)
+            return None
+
+    def clean_and_insert_limit_cpt_list(
+            self,
+            trade_date: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            table_name: str = "limit_cpt_list"
+    ) -> Optional[int]:
+        """最强板块数据清洗入库"""
+        logger.info(f"===== 开始最强板块数据入库 | trade_date={trade_date} =====")
+
+        raw_df = data_fetcher.fetch_limit_cpt_list(
+            trade_date=trade_date, start_date=start_date, end_date=end_date
+        )
+        if raw_df.empty:
+            logger.debug("最强板块原始数据为空，跳过入库")
+            return 0
+
+        cleaned_df = self._clean_special_fields(raw_df)
+        if cleaned_df.empty:
+            return 0
+
+        final_df = self._align_df_with_db(cleaned_df, table_name)
+        try:
+            affected_rows = db.batch_insert_df(df=final_df, table_name=table_name, ignore_duplicate=True)
+            logger.info(f"最强板块入库完成 | 影响行数：{affected_rows}")
+            return affected_rows
+        except Exception as e:
+            logger.error(f"最强板块入库失败：{str(e)}", exc_info=True)
+            return None
+
     def insert_stock_st(
             self,
             ts_code: Optional[str] = None,

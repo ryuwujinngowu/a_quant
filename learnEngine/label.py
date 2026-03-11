@@ -1,27 +1,113 @@
 # learnEngine/label.py
+"""
+训练集标签引擎
+=============
+统一生成训练集标签，标签口径与策略实际操作对齐：
+    - 策略在 D 日收盘后生成信号，D+1 日开盘买入
+    - 因此标签买入价 = D+1 open，卖出价 = D+1 close
+
+label 定义：
+    label1 : (D+1 close - D+1 open) / D+1 open >= 5%  → 1，否则 0
+             含义：D+1 日以开盘价买入、收盘价卖出，涨幅达 5%
+    label2 : D+2 open > D+1 close → 1，否则 0
+             含义：D+1 持仓到 D+2 是否高开（是否值得隔夜持股）
+
+过滤逻辑：
+    - D+1 停牌（无数据）→ 跳过，不作为负样本
+    - D+2 无数据且仅需 label1 → label2 填 NaN，后续清洗时 dropna 即可
+"""
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from typing import List
 import pandas as pd
-import numpy as np
+from utils.common_tools import get_trade_dates, get_daily_kline_data
 from utils.log_utils import logger
 
 
-def generate_stock_label(stock_daily_df: pd.DataFrame, trade_date: str, next_trade_date: str) -> int:
-    """
-    生成单只个股的标签（和你的策略逻辑完全对齐）
-    :param stock_daily_df: 个股T日和T+1日的日线数据
-    :param trade_date: T日（买入日）
-    :param next_trade_date: T+1日（卖出日）
-    :return: 1=T+1日上涨赚钱，0=T+1日下跌亏钱
-    """
-    try:
-        # T日收盘价（买入价）
-        buy_price = stock_daily_df[stock_daily_df["trade_date"] == trade_date]["close"].iloc[0]
-        # T+1日收盘价（卖出价）
-        sell_price = stock_daily_df[stock_daily_df["trade_date"] == next_trade_date]["close"].iloc[0]
+class LabelEngine:
+    """训练集标签生成引擎"""
 
-        # 计算收益，扣除0.1%的手续费（贴合实盘）
-        profit_rate = (sell_price - buy_price) / buy_price - 0.001
-        # 标签：收益>0则为1（正样本），否则为0（负样本）
-        return 1 if profit_rate > 0 else 0
-    except Exception as e:
-        logger.error(f"生成标签失败：{e}")
-        return 0  # 异常情况标记为负样本
+    def __init__(self, start_date: str, end_date: str):
+        self.start_date = start_date
+        self.end_date   = end_date
+        # 多预留 10 个自然日，确保 end_date 对应的 D+2 交易日在范围内
+        label_end = (pd.to_datetime(end_date) + pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+        self.all_trade_dates = get_trade_dates(start_date, label_end)
+        self.date_idx_map    = {d: i for i, d in enumerate(self.all_trade_dates)}
+
+    def generate_single_date(self, trade_date: str, stock_list: List[str]) -> pd.DataFrame:
+        """
+        生成单日标签（口径与策略对齐：D+1 open 买入，D+1 close 卖出）
+
+        :param trade_date: D 日，格式 yyyy-mm-dd
+        :param stock_list: 候选股代码列表
+        :return: DataFrame，列：stock_code, trade_date, label1, label2
+                 D+1 停牌的股票不会出现在返回结果中
+        """
+        if trade_date not in self.date_idx_map:
+            return pd.DataFrame()
+
+        idx = self.date_idx_map[trade_date]
+        if idx + 2 >= len(self.all_trade_dates):
+            return pd.DataFrame()
+
+        d1_date = self.all_trade_dates[idx + 1]
+        d2_date = self.all_trade_dates[idx + 2]
+
+        # 批量拉取 D+1 和 D+2 日线
+        d1_df = get_daily_kline_data(trade_date=d1_date, ts_code_list=stock_list)
+        d2_df = get_daily_kline_data(trade_date=d2_date, ts_code_list=stock_list)
+
+        if d1_df.empty:
+            logger.warning(f"[LabelEngine] {d1_date} 日线数据为空，跳过")
+            return pd.DataFrame()
+
+        d1_df["trade_date"] = d1_df["trade_date"].astype(str)
+        if not d2_df.empty:
+            d2_df["trade_date"] = d2_df["trade_date"].astype(str)
+
+        # 构建快速查找
+        d1_map = {row["ts_code"]: row for _, row in d1_df.iterrows()}
+        d2_map = {row["ts_code"]: row for _, row in d2_df.iterrows()} if not d2_df.empty else {}
+
+        rows = []
+        for ts_code in stock_list:
+            d1_row = d1_map.get(ts_code)
+            if d1_row is None:
+                # D+1 停牌，跳过（不作为负样本）
+                continue
+
+            d1_open  = d1_row.get("open",  0)
+            d1_close = d1_row.get("close", 0)
+
+            if not d1_open or d1_open <= 0:
+                continue
+
+            # label1：D+1 日内收益率 = (D+1 close - D+1 open) / D+1 open
+            d1_intra_return = (d1_close - d1_open) / d1_open
+            label1 = 1 if d1_intra_return >= 0.05 else 0
+
+            # label2：D+2 高开 = D+2 open > D+1 close
+            d2_row = d2_map.get(ts_code)
+            if d2_row is not None:
+                d2_open = d2_row.get("open", 0)
+                label2 = 1 if d2_open > d1_close else 0
+            else:
+                label2 = None  # D+2 无数据，后续清洗时 dropna
+
+            rows.append({
+                "stock_code": ts_code,
+                "trade_date": trade_date,
+                "label1":     label1,
+                "label2":     label2,
+            })
+
+        result = pd.DataFrame(rows)
+        if not result.empty:
+            logger.info(
+                f"[LabelEngine] {trade_date} 标签生成完成 | "
+                f"样本数:{len(result)} | 正样本(label1):{result['label1'].sum()}"
+            )
+        return result
