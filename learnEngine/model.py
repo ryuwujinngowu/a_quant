@@ -32,6 +32,7 @@ class SectorHeatXGBModel:
             "max_depth":           4,
             "learning_rate":       0.05,
             "n_estimators":        500,        # 配合 early_stopping 使用
+            "early_stopping_rounds": 50,        # 【核心修复】移到这里，兼容新版本XGBoost
             "subsample":           0.8,        # 行采样，防过拟合
             "colsample_bytree":    0.8,        # 列采样，防过拟合
             "min_child_weight":    5,          # 叶节点最小样本数
@@ -49,6 +50,7 @@ class SectorHeatXGBModel:
         pos = int(y_train.sum())
         neg = int(len(y_train) - pos)
         scale_pos_weight = round(neg / pos, 2) if pos > 0 else 1.0
+        scale_pos_weight = min(scale_pos_weight,4.0)
         logger.info(
             f"训练集样本分布 | 正样本(买入):{pos} 负样本:{neg} "
             f"→ scale_pos_weight={scale_pos_weight}"
@@ -59,10 +61,10 @@ class SectorHeatXGBModel:
 
         # ── 训练（eval_set 用于 early stopping 监控 AUC）──────────────────
         logger.info("开始训练 XGBoost 模型...")
+        # 【核心修复】fit()里不再传early_stopping_rounds，只保留eval_set和verbose
         self.model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
-            early_stopping_rounds=50,   # 50 轮 AUC 无提升则停止
             verbose=False,
         )
 

@@ -6,3 +6,4 @@ tests/
 *.iml
 .run
 __pycache__/
+utils/wechat_push.py
