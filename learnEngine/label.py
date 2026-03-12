@@ -9,12 +9,17 @@
 label 定义：
     label1 : (D+1 close - D+1 open) / D+1 open >= 5%  → 1，否则 0
              含义：D+1 日以开盘价买入、收盘价卖出，涨幅达 5%
-    label2 : D+2 open > D+1 close → 1，否则 0
-             含义：D+1 持仓到 D+2 是否高开（是否值得隔夜持股）
+             模型主训练标签（TARGET_LABEL = "label1"）
+
+    label2 : D+2 open > D+1 close  AND  D+1 close > D+1 open → 1，否则 0
+             含义：D+1 日内已盈利（close > open）且 D+2 高开（隔夜继续赚），
+                   即值得持仓过夜的强势票
+             设计约束：label2=1 必然满足 label1（label2 ⊆ label1 的充分子集）
+             可用于策略二阶过滤：模型选出 label1 候选后，label2 高概率的票优先持仓
 
 过滤逻辑：
     - D+1 停牌（无数据）→ 跳过，不作为负样本
-    - D+2 无数据且仅需 label1 → label2 填 NaN，后续清洗时 dropna 即可
+    - D+2 无数据 → label2 填 NaN，后续清洗时 dropna 即可
 """
 import sys
 import os
@@ -89,11 +94,15 @@ class LabelEngine:
             d1_intra_return = (d1_close - d1_open) / d1_open
             label1 = 1 if d1_intra_return >= 0.05 else 0
 
-            # label2：D+2 高开 = D+2 open > D+1 close
+            # label2：D+1 日内盈利 AND D+2 高开
+            # 设计约束：label2=1 必然满足 label1（值得隔夜持股的强势票）
+            # 原定义（D+2 open > D+1 close）存在 label1=0 时 label2=1 的语义矛盾：
+            # D+1 日内亏损但 D+2 高开 → 实际仍是亏损交易，不应标记为正样本
             d2_row = d2_map.get(ts_code)
             if d2_row is not None:
-                d2_open = d2_row.get("open", 0)
-                label2 = 1 if d2_open > d1_close else 0
+                d2_open  = d2_row.get("open", 0)
+                # 同时满足：D+1 日内盈利（close > open）且 D+2 高开（open > D+1 close）
+                label2 = 1 if (d1_close > d1_open) and (d2_open > d1_close) else 0
             else:
                 label2 = None  # D+2 无数据，后续清洗时 dropna
 
