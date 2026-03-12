@@ -29,7 +29,8 @@ dataset.py
   ↓
 FeatureDataBundle(trade_date, target_ts_codes, ...)
   ├─ _load_trade_dates()     → lookback_dates_5d / 20d
-  ├─ _load_daily_data()      → daily_grouped dict（O(1) 查找）
+  ├─ _load_daily_data()      → daily_grouped dict（O(1) 查找，20 日不复权）
+  ├─ _load_qfq_data()        → qfq_daily_grouped dict（20 日前复权，MA 专用）
   ├─ _load_macro_data()      → macro_cache（涨跌停/连板/板块/指数）
   └─ _load_minute_data()     → minute_cache（候选股近 5 日分钟线）
   ↓
@@ -119,6 +120,20 @@ adapt_score    = base_score × 100 × 主线修正系数
 | `stock_break_times_{d}` | 涨停开板次数（开板越多情绪越弱） |
 | `stock_lift_times_{d}` | 跌停翘板次数 |
 
+#### 时间持续类因子（4×5=20 列）
+
+> 数据来源：当日分钟线（1min bars）+ 昨日日线（pre_close / 昨日 VWAP）
+
+| 因子名 | 取值 | 计算逻辑 |
+|--------|------|----------|
+| `stock_red_time_ratio_{d}` | [0,1] | 分钟线中 close > pre_close（昨收）的比例 |
+| `stock_float_profit_time_ratio_{d}` | [0,1] | 分钟线中 close > 昨日 VWAP 的比例（浮盈时间） |
+| `stock_red_session_pm_ratio_{d}` | [0,1] | 红盘分钟中处于午盘（13:00-15:00）的比例；0=早盘主导，0.5=均衡/无红盘，1=午盘主导 |
+| `stock_float_session_pm_ratio_{d}` | [0,1] | 浮盈分钟中处于午盘的比例；编码含义同上 |
+
+> **昨日 VWAP 计算**：`kline_day.amount（千元）× 1000 / (kline_day.vol（手）× 100)` = `amount × 10 / vol`（元/股）
+> 当昨日 VWAP 无法计算时（新股/D-1 停牌），回退使用 pre_close 作为参考价。
+
 #### 量能因子（1×5=5 列）
 
 | 因子名 | 计算逻辑 |
@@ -133,7 +148,7 @@ adapt_score    = base_score × 100 × 主线修正系数
 | `sector_avg_loss_{d}` | 该板块当日下跌股的 100-SEI 均值 |
 | `stock_sector_20d_rank` | 个股在所属板块内的 20 日涨幅排名 |
 
-**小计**: ~120 列
+**小计**: ~140 列
 
 ---
 
@@ -141,10 +156,11 @@ adapt_score    = base_score × 100 × 主线修正系数
 
 **文件**: `technical/ma_position_feature.py`
 **输出类型**: 个股级，D 日截面（无 d0-d4 后缀）
+**数据来源**: `kline_day_qfq`（前复权）优先，单日缺失时降级用 `kline_day`（不复权）
 
 | 因子名 | 计算逻辑 |
 |--------|----------|
-| `ma5` / `ma10` / `ma13` | 简单移动均线（近 N 日收盘价均值） |
+| `ma5` / `ma10` / `ma13` | 简单移动均线（近 N 日**前复权**收盘价均值，避免分红/送转跳空失真） |
 | `bias5` / `bias10` / `bias13` | 乖离率 = (close - MA) / MA × 100 |
 | `ma5_slope` | MA5 动能 = (MA5_D - MA5_{D-1}) / MA5_{D-1} |
 | `ma_align` | 均线排列评分：2=完美多头, 1=弱多, 0=中性, -1=弱空, -2=完美空头 |
