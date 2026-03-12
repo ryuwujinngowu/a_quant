@@ -310,7 +310,7 @@ if __name__ == "__main__":
     OUTPUT_CSV_PATH       = os.path.join(os.getcwd(), "train_dataset.csv")
     PROCESSED_DATES_FILE  = "processed_dates.json"
     # 因子逻辑有变更（新增列、修改计算公式）时必须更新版本号，否则旧数据不会重跑
-    FACTOR_VERSION        = "v3.1_market_total_vol"
+    FACTOR_VERSION        = "v3.2_qfq_ma_red_time"
     # =====================================================
 
     # ---------- 初始化核心组件 ----------

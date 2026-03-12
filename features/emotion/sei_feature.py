@@ -165,20 +165,25 @@ class SEIFeature(BaseFeature):
 
         return {
             # 日线可计算
-            "ret_intra":      round(ret,          4),
-            "gap_return":     round(gap_return,   4),
-            "candle_type":    candle_type,
-            "upper_shadow":   round(upper_shadow, 4),
-            "lower_shadow":   round(lower_shadow, 4),
-            "cpr":            round(cpr,          4),
+            "ret_intra":               round(ret,          4),
+            "gap_return":              round(gap_return,   4),
+            "candle_type":             candle_type,
+            "upper_shadow":            round(upper_shadow, 4),
+            "lower_shadow":            round(lower_shadow, 4),
+            "cpr":                     round(cpr,          4),
             # 需要分钟线，填保守中性值
-            "max_dd_intra":   0.10,   # 保守中位值
-            "trend_r2":       0.50,   # 中性
-            "vwap_deviation": 0.01,   # 保守小值
-            "break_times":    0,
-            "seal_times":     0,
-            "lift_times":     0,
-            "day_close":      close_price,
+            "max_dd_intra":            0.10,   # 保守中位值
+            "trend_r2":                0.50,   # 中性
+            "vwap_deviation":          0.01,   # 保守小值
+            "break_times":             0,
+            "seal_times":              0,
+            "lift_times":              0,
+            # 时间持续类因子（无分钟线时填中性值 0.5）
+            "red_time_ratio":          0.5,
+            "float_profit_time_ratio": 0.5,
+            "red_session_pm_ratio":    0.5,
+            "float_session_pm_ratio":  0.5,
+            "day_close":               close_price,
         }
 
     # ------------------------------------------------------------------ #
@@ -191,9 +196,14 @@ class SEIFeature(BaseFeature):
             pre_close:  float,
             up_limit:   float,
             down_limit: float,
+            vwap_prev:  float = 0.0,
     ) -> tuple:
         """
         基于分钟线计算 HDI 及全量原子因子
+
+        :param vwap_prev: 昨日 VWAP（元/股），用于计算浮盈持续时间
+                          = 昨日 amount / (昨日 vol × 100)
+                          为 0 时浮盈持续时间降级为红盘持续时间
 
         :return: (hdi_score [0-100], factors dict)
                  无分钟线时返回 (50.0, {})
@@ -285,6 +295,39 @@ class SEIFeature(BaseFeature):
         touch_dn    = low_arr  <= (down_limit + 0.01)
         lift_times  = int(np.sum(np.diff(touch_dn.astype(int)) == -1))
 
+        # [14] 红盘持续时间 & 浮盈持续时间 & 早/午盘偏向
+        #   早盘: 9:30~11:30（120分钟），午盘: 13:00~15:00（120分钟）
+        #   red_session_pm_ratio / float_session_pm_ratio ∈ [0,1]
+        #   0=全在早盘, 0.5=均衡/无红盘, 1=全在午盘
+        total_min = len(close_arr)
+        if total_min > 0:
+            times_dt    = pd.to_datetime(df["trade_time"])
+            hour_frac   = times_dt.dt.hour + times_dt.dt.minute / 60.0
+            am_mask     = ((hour_frac >= 9.5)  & (hour_frac <= 11.5)).values
+            pm_mask     = ((hour_frac >= 13.0) & (hour_frac <= 15.0)).values
+
+            # 红盘（高于昨收）
+            red_mask            = close_arr > pre_close
+            red_time_ratio      = float(red_mask.sum()) / total_min
+            am_red = int((red_mask & am_mask).sum())
+            pm_red = int((red_mask & pm_mask).sum())
+            _red_tot            = am_red + pm_red
+            red_session_pm_ratio = pm_red / (_red_tot + 1e-9) if _red_tot > 0 else 0.5
+
+            # 浮盈（高于昨日 VWAP）；vwap_prev=0 时降级用昨收
+            _vwap_ref           = vwap_prev if vwap_prev and vwap_prev > 0 else pre_close
+            float_mask          = close_arr > _vwap_ref
+            float_profit_time_ratio = float(float_mask.sum()) / total_min
+            am_flt = int((float_mask & am_mask).sum())
+            pm_flt = int((float_mask & pm_mask).sum())
+            _flt_tot               = am_flt + pm_flt
+            float_session_pm_ratio = pm_flt / (_flt_tot + 1e-9) if _flt_tot > 0 else 0.5
+        else:
+            red_time_ratio         = 0.5
+            float_profit_time_ratio = 0.5
+            red_session_pm_ratio   = 0.5
+            float_session_pm_ratio = 0.5
+
         # ---- HDI 合成 ----
         w = HDI_WEIGHTS
         hdi_raw = (
@@ -299,19 +342,25 @@ class SEIFeature(BaseFeature):
         hdi_score = round(float(np.clip(hdi_raw * 100, 0, 100)), 2)
 
         factors = {
-            "ret_intra":      round(ret,            4),
-            "gap_return":     round(gap_return,     4),
-            "cpr":            round(cpr,            4),
-            "max_dd_intra":   round(max_dd_intra,   4),
-            "upper_shadow":   round(upper_shadow,   4),
-            "lower_shadow":   round(lower_shadow,   4),
-            "trend_r2":       round(trend_r2,       4),
-            "vwap_deviation": round(vwap_deviation, 4),
-            "candle_type":    candle_type,
-            "break_times":    break_times,
-            "seal_times":     seal_times,
-            "lift_times":     lift_times,
-            "day_close":      day_close,   # 内部使用，不输出到 CSV
+            "ret_intra":               round(ret,                     4),
+            "gap_return":              round(gap_return,              4),
+            "cpr":                     round(cpr,                     4),
+            "max_dd_intra":            round(max_dd_intra,            4),
+            "upper_shadow":            round(upper_shadow,            4),
+            "lower_shadow":            round(lower_shadow,            4),
+            "trend_r2":                round(trend_r2,                4),
+            "vwap_deviation":          round(vwap_deviation,          4),
+            "candle_type":             candle_type,
+            "break_times":             break_times,
+            "seal_times":              seal_times,
+            "lift_times":              lift_times,
+            # ── 新增：时间持续类因子 ────────────────────────────────────
+            "red_time_ratio":          round(red_time_ratio,          4),
+            "float_profit_time_ratio": round(float_profit_time_ratio, 4),
+            "red_session_pm_ratio":    round(red_session_pm_ratio,    4),
+            "float_session_pm_ratio":  round(float_session_pm_ratio,  4),
+            # ────────────────────────────────────────────────────────────
+            "day_close":               day_close,   # 内部使用，不输出到 CSV
         }
         return hdi_score, factors
 
