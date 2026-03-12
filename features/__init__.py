@@ -33,12 +33,32 @@ from features.feature_registry import feature_registry, FeatureRegistry
 from features.data_bundle import FeatureDataBundle
 from utils.log_utils import logger
 
-# 导入即完成注册，顺序决定 get_all_features 的返回顺序
-from features.emotion.sei_feature import SEIFeature                        # noqa: F401
-from features.sector.sector_heat_feature import SectorHeatFeature          # noqa: F401
-from features.sector.sector_stock_feature import SectorStockFeature        # noqa: F401
-from features.technical.ma_position_feature import MAPositionFeature       # noqa: F401
-from features.macro.market_macro_feature import MarketMacroFeature         # noqa: F401
+# ──────────────────────────────────────────────────────────────────────
+# 因子注册区（"导入即注册"机制）
+#
+# 工作原理：
+#   每个因子文件顶部都有 @feature_registry.register("xxx") 装饰器。
+#   Python 执行 import 语句时，该装饰器立即运行，将类写入注册中心的
+#   全局字典。因此「import = 注册」，无需手动调用任何注册函数。
+#
+# 新增因子 — 只需 2 步：
+#   1. 在对应子目录下新建 .py 文件，继承 BaseFeature 并加装饰器
+#   2. 在下方加一行 import（noqa 注释抑制"未使用变量"IDE 警告）
+#      示例：from features.your_dir.your_file import YourFeature  # noqa: F401
+#
+# 删除因子 — 只需 1 步：
+#   删除或注释掉对应的 import 行，该因子将从注册中心消失，
+#   FeatureEngine 不会再调用它。（旧训练集列会在下次重跑后自然消失）
+#
+# 顺序说明：
+#   import 的顺序决定 get_all_features() 的返回顺序，
+#   进而影响 FeatureEngine 并行调度时的日志打印顺序（不影响结果）。
+# ──────────────────────────────────────────────────────────────────────
+from features.emotion.sei_feature import SEIFeature                        # noqa: F401  # SEI/HDI 情绪引擎（内部工具，不单独注册）
+from features.sector.sector_heat_feature import SectorHeatFeature          # noqa: F401  # 板块热度 + adapt_score（全局因子）
+from features.sector.sector_stock_feature import SectorStockFeature        # noqa: F401  # 板块个股全量情绪因子（个股因子）
+from features.technical.ma_position_feature import MAPositionFeature       # noqa: F401  # 均线 + 乖离率 + 位置（个股因子，用前复权数据）
+from features.macro.market_macro_feature import MarketMacroFeature         # noqa: F401  # 市场宏观因子：涨跌停/连板/指数（全局因子）
 
 __all__ = [
     "FeatureEngine", "FeatureDataBundle",
