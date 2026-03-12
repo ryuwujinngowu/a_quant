@@ -385,6 +385,31 @@ def get_daily_kline_data(trade_date: str, ts_code_list: List[str] = None) -> pd.
         return pd.DataFrame()
 
 
+def get_qfq_kline_data(trade_date: str, ts_code_list: List[str] = None) -> pd.DataFrame:
+    """
+    获取指定日期的前复权日线数据（MA 计算专用）
+
+    :param trade_date:   交易日，兼容 YYYY-MM-DD / YYYYMMDD 格式
+    :param ts_code_list: 【可选】仅查询指定股票；为空时查全市场
+    :return: 前复权日线 DataFrame（无数据返回空 DF）
+    """
+    trade_date_fmt = trade_date.replace("-", "")
+    if ts_code_list:
+        sql    = "SELECT ts_code, trade_date, open, high, low, close, vol, amount FROM kline_day_qfq WHERE trade_date = %s AND ts_code IN %s"
+        params = (trade_date_fmt, tuple(ts_code_list))
+    else:
+        sql    = "SELECT ts_code, trade_date, open, high, low, close, vol, amount FROM kline_day_qfq WHERE trade_date = %s"
+        params = (trade_date_fmt,)
+    try:
+        df = db.query(sql, params=params, return_df=True)
+        if df is not None and not df.empty:
+            df["trade_date"] = df["trade_date"].astype(str)
+            return df
+    except Exception as e:
+        logger.warning(f"[qfq] {trade_date} 前复权日线查询失败：{e}")
+    return pd.DataFrame()
+
+
 def getStockRank_fortraining(trade_date: str) -> Optional[pd.DataFrame]:
     """
     数据库读取指定日期trade_date

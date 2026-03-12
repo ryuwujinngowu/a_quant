@@ -35,6 +35,18 @@
   stock_vol_ratio_{d}   : 量比 = 当日量 / 近5日均量
                           放量>1，缩量<1，停牌=0
 
+【时间持续类因子 ★ 新增维度】
+  stock_red_time_ratio_{d}          : 红盘持续时间 = 收盘>昨收的分钟数 / 全天总分钟数
+                                      0=全天绿盘，1=全天红盘，0.5=均衡（无分钟线时默认）
+  stock_float_profit_time_ratio_{d} : 浮盈持续时间 = 收盘>昨日均价的分钟数 / 全天总分钟数
+                                      昨日均价 = amount / (vol × 100)
+                                      相比红盘时间更反映"大资金成本"的盈亏状态
+  stock_red_session_pm_ratio_{d}    : 红盘时段午盘占比
+                                      = 午盘红盘分钟数 / (早盘+午盘红盘分钟数)
+                                      0=红盘全在早盘（可能日内衰减），1=全在午盘（持续性强）
+                                      无红盘时填 0.5（中性），早盘: 9:30-11:30，午盘: 13:00-15:00
+  stock_float_session_pm_ratio_{d}  : 浮盈时段午盘占比（同 red_session_pm_ratio 逻辑）
+
 【板块平均因子】
   sector_avg_profit_{d}, sector_avg_loss_{d}
 
@@ -71,19 +83,24 @@ _SEI_WORKERS = 6
 # 无分钟线时的回退中性值（语义：数据不完整，不是停牌）
 # ============================================================
 ATOMIC_NEUTRAL = {
-    "gap_return":    0.0,    # 无法判断，填平开
-    "candle_type":   0,      # 0=无结构信息
-    "cpr":           0.5,    # 中性位置
-    "max_dd_intra":  0.10,   # 保守中位值
-    "upper_shadow":  0.0,
-    "lower_shadow":  0.0,
-    "trend_r2":      0.5,    # 中性
-    "vwap_deviation":0.01,   # 保守小值
-    "seal_times":    0,
-    "break_times":   0,
-    "lift_times":    0,
-    "vol_ratio":     1.0,    # 正常量
-    "hdi":           50.0,
+    "gap_return":             0.0,    # 无法判断，填平开
+    "candle_type":            0,      # 0=无结构信息
+    "cpr":                    0.5,    # 中性位置
+    "max_dd_intra":           0.10,   # 保守中位值
+    "upper_shadow":           0.0,
+    "lower_shadow":           0.0,
+    "trend_r2":               0.5,    # 中性
+    "vwap_deviation":         0.01,   # 保守小值
+    "seal_times":             0,
+    "break_times":            0,
+    "lift_times":             0,
+    "vol_ratio":              1.0,    # 正常量
+    "hdi":                    50.0,
+    # 时间持续类因子（无数据时中性 0.5）
+    "red_time_ratio":         0.5,
+    "float_profit_time_ratio":0.5,
+    "red_session_pm_ratio":   0.5,
+    "float_session_pm_ratio": 0.5,
 }
 
 # 停牌时的填充值（语义：该股无行情，成交量 = 0）
@@ -120,9 +137,13 @@ class SectorStockFeature(BaseFeature):
         *[f"stock_seal_times_{t}"    for t in _day_tags],
         *[f"stock_break_times_{t}"   for t in _day_tags],
         *[f"stock_lift_times_{t}"    for t in _day_tags],
-        *[f"stock_vol_ratio_{t}"     for t in _day_tags],
-        *[f"sector_avg_profit_{t}"   for t in _day_tags],
-        *[f"sector_avg_loss_{t}"     for t in _day_tags],
+        *[f"stock_vol_ratio_{t}"              for t in _day_tags],
+        *[f"stock_red_time_ratio_{t}"         for t in _day_tags],
+        *[f"stock_float_profit_time_ratio_{t}" for t in _day_tags],
+        *[f"stock_red_session_pm_ratio_{t}"   for t in _day_tags],
+        *[f"stock_float_session_pm_ratio_{t}" for t in _day_tags],
+        *[f"sector_avg_profit_{t}"            for t in _day_tags],
+        *[f"sector_avg_loss_{t}"              for t in _day_tags],
     ]
 
     def __init__(self):
@@ -158,12 +179,13 @@ class SectorStockFeature(BaseFeature):
     def calculate(self, data_bundle) -> tuple:
         result_rows   = []
         factor_dict   = {}
-        trade_date    = data_bundle.trade_date
-        top3_sectors  = data_bundle.top3_sectors
-        sector_map    = data_bundle.sector_candidate_map
-        daily_grouped = data_bundle.daily_grouped
-        minute_cache  = data_bundle.minute_cache
-        all_dates_5d  = data_bundle.lookback_dates_5d   # 升序，[-1]=trade_date
+        trade_date     = data_bundle.trade_date
+        top3_sectors   = data_bundle.top3_sectors
+        sector_map     = data_bundle.sector_candidate_map
+        daily_grouped  = data_bundle.daily_grouped
+        minute_cache   = data_bundle.minute_cache
+        all_dates_5d   = data_bundle.lookback_dates_5d    # 升序，[-1]=trade_date
+        all_dates_20d  = sorted(data_bundle.lookback_dates_20d)  # 升序，用于 prev_date 查找
 
         # d0=trade_date，d4=4天前
         day_tag_map: Dict[str, str] = {
@@ -221,13 +243,28 @@ class SectorStockFeature(BaseFeature):
 
             def _compute_sei(task):
                 daily_key, daily_row, pre_close = task
-                ts_code = daily_key[0]
+                ts_code, target_date = daily_key
                 up_limit   = calc_limit_up_price(ts_code, pre_close)
                 down_limit = calc_limit_down_price(ts_code, pre_close)
                 minute_df  = minute_cache.get(daily_key, pd.DataFrame())
 
+                # 昨日 VWAP（元/股）= amount(千元) × 1000 / (vol(手) × 100股/手)
+                #                  = amount × 10 / vol
+                # 用于浮盈持续时间计算；找不到昨日数据则传 0（sei_feature 内部降级为昨收）
+                vwap_prev = 0.0
+                try:
+                    idx = all_dates_20d.index(target_date)
+                    if idx > 0:
+                        prev_row = daily_grouped.get((ts_code, all_dates_20d[idx - 1]), {})
+                        prev_vol = float(prev_row.get("vol",    0) or 0)
+                        prev_amt = float(prev_row.get("amount", 0) or 0)
+                        if prev_vol > 0:
+                            vwap_prev = prev_amt * 10 / prev_vol   # 千元×1000/(手×100) = 元/股
+                except (ValueError, IndexError):
+                    pass
+
                 hdi, factors = sei_calc._calculate_minute_hdi(
-                    minute_df, pre_close, up_limit, down_limit
+                    minute_df, pre_close, up_limit, down_limit, vwap_prev=vwap_prev
                 )
                 if factors:
                     sei = sei_calc._factors_to_sei(factors, up_limit)
@@ -342,30 +379,38 @@ class SectorStockFeature(BaseFeature):
                         row[f"stock_lower_shadow_{day_tag}"]  = f.get("lower_shadow",   ATOMIC_NEUTRAL["lower_shadow"])
                         row[f"stock_trend_r2_{day_tag}"]      = f.get("trend_r2",       ATOMIC_NEUTRAL["trend_r2"])
                         row[f"stock_vwap_dev_{day_tag}"]      = f.get("vwap_deviation", ATOMIC_NEUTRAL["vwap_deviation"])
-                        row[f"stock_seal_times_{day_tag}"]    = f.get("seal_times",     0)
-                        row[f"stock_break_times_{day_tag}"]   = f.get("break_times",    0)
-                        row[f"stock_lift_times_{day_tag}"]    = f.get("lift_times",     0)
-                        row[f"stock_vol_ratio_{day_tag}"]     = self._calc_vol_ratio(
+                        row[f"stock_seal_times_{day_tag}"]               = f.get("seal_times",             0)
+                        row[f"stock_break_times_{day_tag}"]              = f.get("break_times",            0)
+                        row[f"stock_lift_times_{day_tag}"]               = f.get("lift_times",             0)
+                        row[f"stock_vol_ratio_{day_tag}"]                = self._calc_vol_ratio(
                             ts_code, target_date, all_dates_5d, daily_grouped
                         )
+                        row[f"stock_red_time_ratio_{day_tag}"]           = f.get("red_time_ratio",          ATOMIC_NEUTRAL["red_time_ratio"])
+                        row[f"stock_float_profit_time_ratio_{day_tag}"]  = f.get("float_profit_time_ratio", ATOMIC_NEUTRAL["float_profit_time_ratio"])
+                        row[f"stock_red_session_pm_ratio_{day_tag}"]     = f.get("red_session_pm_ratio",    ATOMIC_NEUTRAL["red_session_pm_ratio"])
+                        row[f"stock_float_session_pm_ratio_{day_tag}"]   = f.get("float_session_pm_ratio",  ATOMIC_NEUTRAL["float_session_pm_ratio"])
 
                     else:
                         # 停牌或完全无数据
-                        row[f"stock_profit_{day_tag}"]       = 0.0
-                        row[f"stock_loss_{day_tag}"]         = 0.0
-                        row[f"stock_hdi_{day_tag}"]          = SUSPENDED_FILL["hdi"]
-                        row[f"stock_gap_return_{day_tag}"]   = SUSPENDED_FILL["gap_return"]
-                        row[f"stock_candle_{day_tag}"]       = SUSPENDED_FILL["candle_type"]
-                        row[f"stock_cpr_{day_tag}"]          = SUSPENDED_FILL["cpr"]
-                        row[f"stock_max_dd_{day_tag}"]       = SUSPENDED_FILL["max_dd_intra"]
-                        row[f"stock_upper_shadow_{day_tag}"] = SUSPENDED_FILL["upper_shadow"]
-                        row[f"stock_lower_shadow_{day_tag}"] = SUSPENDED_FILL["lower_shadow"]
-                        row[f"stock_trend_r2_{day_tag}"]     = SUSPENDED_FILL["trend_r2"]
-                        row[f"stock_vwap_dev_{day_tag}"]     = SUSPENDED_FILL["vwap_deviation"]
-                        row[f"stock_seal_times_{day_tag}"]   = 0
-                        row[f"stock_break_times_{day_tag}"]  = 0
-                        row[f"stock_lift_times_{day_tag}"]   = 0
-                        row[f"stock_vol_ratio_{day_tag}"]    = SUSPENDED_FILL["vol_ratio"]
+                        row[f"stock_profit_{day_tag}"]                   = 0.0
+                        row[f"stock_loss_{day_tag}"]                     = 0.0
+                        row[f"stock_hdi_{day_tag}"]                      = SUSPENDED_FILL["hdi"]
+                        row[f"stock_gap_return_{day_tag}"]               = SUSPENDED_FILL["gap_return"]
+                        row[f"stock_candle_{day_tag}"]                   = SUSPENDED_FILL["candle_type"]
+                        row[f"stock_cpr_{day_tag}"]                      = SUSPENDED_FILL["cpr"]
+                        row[f"stock_max_dd_{day_tag}"]                   = SUSPENDED_FILL["max_dd_intra"]
+                        row[f"stock_upper_shadow_{day_tag}"]             = SUSPENDED_FILL["upper_shadow"]
+                        row[f"stock_lower_shadow_{day_tag}"]             = SUSPENDED_FILL["lower_shadow"]
+                        row[f"stock_trend_r2_{day_tag}"]                 = SUSPENDED_FILL["trend_r2"]
+                        row[f"stock_vwap_dev_{day_tag}"]                 = SUSPENDED_FILL["vwap_deviation"]
+                        row[f"stock_seal_times_{day_tag}"]               = 0
+                        row[f"stock_break_times_{day_tag}"]              = 0
+                        row[f"stock_lift_times_{day_tag}"]               = 0
+                        row[f"stock_vol_ratio_{day_tag}"]                = SUSPENDED_FILL["vol_ratio"]
+                        row[f"stock_red_time_ratio_{day_tag}"]           = SUSPENDED_FILL["red_time_ratio"]
+                        row[f"stock_float_profit_time_ratio_{day_tag}"]  = SUSPENDED_FILL["float_profit_time_ratio"]
+                        row[f"stock_red_session_pm_ratio_{day_tag}"]     = SUSPENDED_FILL["red_session_pm_ratio"]
+                        row[f"stock_float_session_pm_ratio_{day_tag}"]   = SUSPENDED_FILL["float_session_pm_ratio"]
 
                     # ---- 板块平均（无条件填充）----
                     row[f"sector_avg_profit_{day_tag}"] = sector_day_factors[day_tag]["profit"]
