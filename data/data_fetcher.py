@@ -454,38 +454,49 @@ class DataFetcher:
             end_date: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        获取涨跌停池数据（同花顺 limit_list_ths 接口）
-        接口文档：https://tushare.pro/document/2?doc_id=XXX
+        获取涨跌停数据（底层接口已迁移至 limit_list_d，比旧 limit_list_ths 字段更丰富）
 
         Args:
-            trade_date: 交易日期（YYYYMMDD）
-            ts_code: 股票代码
-            limit_type: 涨停池/连扳池/冲刺涨停/炸板池/跌停池，默认涨停池
-            market: HS-沪深主板 GEM-创业板 STAR-科创板
-            start_date: 开始日期
-            end_date: 结束日期
+            trade_date  : 交易日（YYYYMMDD）
+            ts_code     : 股票代码
+            limit_type  : 类型，支持中文（涨停池/跌停池/炸板池）或 API 原生码（U/D/Z）
+            market      : 交易所（SH/SZ/BJ），透传为 exchange 参数
+            start_date  : 开始日期（YYYYMMDD）
+            end_date    : 结束日期（YYYYMMDD）
 
         Returns:
-            涨跌停池 DataFrame（空数据返回空 DataFrame）
+            DataFrame，含 limit_type 列（中文，与 DB 存储格式兼容）
         """
+        # 中文 → API 参数映射（兼容旧调用方传入中文 limit_type）
+        _TO_API = {"涨停池": "U", "跌停池": "D", "炸板池": "Z"}
+        _TO_CN  = {"U": "涨停池", "D": "跌停池", "Z": "炸板池"}
+
+        api_limit_type = _TO_API.get(limit_type, limit_type) if limit_type else None
+
         params = _filter_empty_params({
             "trade_date": trade_date,
-            "ts_code": ts_code,
-            "limit_type": limit_type,
-            "market": market,
+            "ts_code":    ts_code,
+            "limit_type": api_limit_type,
+            "exchange":   market,          # 旧参数 market 映射到新接口的 exchange
             "start_date": start_date,
-            "end_date": end_date,
+            "end_date":   end_date,
         })
 
         try:
             time.sleep(API_REQUEST_INTERVAL)
-            df = self.pro.limit_list_ths(**params)
-            logger.debug(f"涨跌停池数据获取，参数：{params}，行数：{len(df)}")
-            if df.empty:
-                logger.debug(f"涨跌停池数据为空，参数：{params}")
+            df = self.pro.limit_list_d(**params)
+            if df is None or df.empty:
+                logger.debug(f"limit_list_d 无数据，参数：{params}")
+                return pd.DataFrame()
+
+            # 将 'limit' 列（U/D/Z）映射为中文 limit_type，与 DB 存储格式对齐
+            if "limit" in df.columns:
+                df["limit_type"] = df["limit"].map(_TO_CN).fillna(df["limit"])
+
+            logger.debug(f"limit_list_d 获取成功，参数：{params}，行数：{len(df)}")
             return df
         except Exception as e:
-            logger.error(f"涨跌停池数据获取失败，参数：{params}，错误：{str(e)}")
+            logger.error(f"limit_list_d 接口获取失败，参数：{params}，错误：{str(e)}")
             return pd.DataFrame()
 
     def fetch_limit_step(
