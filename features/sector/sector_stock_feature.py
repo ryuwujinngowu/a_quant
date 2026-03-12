@@ -248,17 +248,18 @@ class SectorStockFeature(BaseFeature):
                 down_limit = calc_limit_down_price(ts_code, pre_close)
                 minute_df  = minute_cache.get(daily_key, pd.DataFrame())
 
-                # 昨日 VWAP = 昨日 amount / (昨日 vol × 100)
+                # 昨日 VWAP（元/股）= amount(千元) × 1000 / (vol(手) × 100股/手)
+                #                  = amount × 10 / vol
                 # 用于浮盈持续时间计算；找不到昨日数据则传 0（sei_feature 内部降级为昨收）
                 vwap_prev = 0.0
                 try:
                     idx = all_dates_20d.index(target_date)
                     if idx > 0:
-                        prev_row   = daily_grouped.get((ts_code, all_dates_20d[idx - 1]), {})
-                        prev_vol   = float(prev_row.get("vol",    0) or 0)
-                        prev_amt   = float(prev_row.get("amount", 0) or 0)
+                        prev_row = daily_grouped.get((ts_code, all_dates_20d[idx - 1]), {})
+                        prev_vol = float(prev_row.get("vol",    0) or 0)
+                        prev_amt = float(prev_row.get("amount", 0) or 0)
                         if prev_vol > 0:
-                            vwap_prev = prev_amt / (prev_vol * 100)
+                            vwap_prev = prev_amt * 10 / prev_vol   # 千元×1000/(手×100) = 元/股
                 except (ValueError, IndexError):
                     pass
 
