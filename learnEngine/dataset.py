@@ -305,9 +305,11 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
 
     # ==================== 可配置参数 ====================
-    START_DATE            = "2026-02-02"
-    END_DATE              = "2026-02-10"
-    OUTPUT_CSV_PATH       = os.path.join(os.getcwd(), "train_dataset.csv")
+    # START_DATE            = "2023-01-02"
+    # END_DATE              = "2023-12-30"
+    START_DATE            = "2025-11-02"
+    END_DATE              = "2026-02-13"
+    OUTPUT_CSV_PATH       = os.path.join(os.getcwd(), "train_dataset_final.csv")
     PROCESSED_DATES_FILE  = "processed_dates.json"
     # 因子逻辑有变更（新增列、修改计算公式）时必须更新版本号，否则旧数据不会重跑
     FACTOR_VERSION        = "v3.1_market_total_vol"

@@ -22,7 +22,7 @@ class SectorHeatXGBModel:
       - eval_metric="auc" : 不平衡数据下 AUC 远比 accuracy 可靠
     """
 
-    def __init__(self, model_save_path: str = "sector_heat_xgb_model.pkl"):
+    def __init__(self, model_save_path: str = "learnEngine/models/sector_heat_xgb_model.pkl"):
         self.model_save_path = model_save_path
         self.model = None
         # scale_pos_weight 在 train() 中根据实际数据动态计算

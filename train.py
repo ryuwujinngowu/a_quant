@@ -35,7 +35,7 @@ from utils.log_utils import logger
 # ============================================================
 # 可配置参数
 # ============================================================
-TRAIN_CSV_PATH   = os.path.join(os.getcwd(), "learnEngine/train_dataset.csv")
+TRAIN_CSV_PATH   = os.path.join(os.getcwd(), "learnEngine/train_dataset_final.csv")
 MODEL_SAVE_PATH  = os.path.join(os.getcwd(), "sector_heat_xgb_model.pkl")
 TARGET_LABEL     = "label1"       # 训练目标：label1 (日内 5% 收益) 或 label2 (隔夜高开)
 VAL_RATIO        = 0.2            # 验证集占比（按时间序列尾部切分）
