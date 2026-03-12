@@ -58,6 +58,25 @@ from utils.log_utils import logger
 
 
 # ============================================================
+# 列名中文映射（新增）
+# ============================================================
+COLUMN_NAME_MAP = {
+    "factor": "factor(因子名称)",
+    "ic_mean": "ic_mean(IC均值-预测力)",
+    "ic_std": "ic_std(IC标准差-稳定性)",
+    "icir": "icir(IC信息比率-综合评分)",
+    "abs_icir": "abs_icir(ICIR绝对值-排序用)",
+    "abs_ic_mean": "abs_ic_mean(IC均值绝对值)",
+    "win_rate": "win_rate(IC>0胜率)",
+    "t_stat": "t_stat(t检验统计量)",
+    "p_value": "p_value(p值-显著性)",
+    "n": "n(有效交易日数)",
+    "effective": "effective(是否有效因子)",
+    "return_col": "return_col(收益列)"
+}
+
+
+# ============================================================
 # 底层：单截面 IC 计算
 # ============================================================
 
@@ -242,10 +261,16 @@ def calc_factor_ic_report(
     # 排序
     sort_col = sort_by if sort_by in report.columns else "abs_icir"
     report = report.sort_values(sort_col, ascending=False, na_position="last")
-    report = report[["factor", "ic_mean", "ic_std", "icir", "abs_icir",
-                     "win_rate", "t_stat", "p_value", "n", "effective"]].reset_index(drop=True)
 
-    effective_n = int(report["effective"].sum())
+    # 【核心修改】选择最终列并添加中文说明
+    final_cols = ["factor", "ic_mean", "ic_std", "icir", "abs_icir",
+                  "win_rate", "t_stat", "p_value", "n", "effective"]
+    report = report[final_cols].reset_index(drop=True)
+
+    # 重命名列，添加中文说明
+    report = report.rename(columns=COLUMN_NAME_MAP)
+
+    effective_n = int(report[COLUMN_NAME_MAP["effective"]].sum())
     logger.info(
         f"[factor_ic] 报告生成完成 | "
         f"总因子数:{len(report)} | 有效因子(|ICIR|>0.5 且 p<0.05):{effective_n}"
@@ -304,7 +329,14 @@ def calc_ic_decay(
         return pd.DataFrame()
 
     decay_df = pd.DataFrame(rows).set_index("return_col")
-    decay_df = decay_df[["ic_mean", "ic_std", "icir", "abs_icir", "win_rate", "p_value", "n", "effective"]]
+
+    # 【核心修改】选择最终列并添加中文说明
+    final_cols = ["ic_mean", "ic_std", "icir", "abs_icir", "win_rate", "p_value", "n", "effective"]
+    decay_df = decay_df[final_cols]
+
+    # 重命名列，添加中文说明
+    decay_df = decay_df.rename(columns=COLUMN_NAME_MAP)
+
     logger.info(f"[factor_ic] IC 衰减分析完成 | 因子: {factor_col} | 期数: {len(rows)}")
     return decay_df
 
@@ -346,21 +378,30 @@ if __name__ == "__main__":
         logger.error("报告为空，请检查数据")
         exit(1)
 
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 100)
     print(f"因子 IC 报告（对 {RETURN_COL}，Spearman，按 |ICIR| 降序）")
-    print("=" * 70)
+    print("=" * 100)
     print(report.to_string(index=True))
-    print("=" * 70)
-    print(f"\n有效因子（|ICIR|>0.5 且 p<0.05）: {int(report['effective'].sum())} / {len(report)}")
+    print("=" * 100)
+
+    # 【修改】适配新的列名获取有效因子数量
+    effective_col = COLUMN_NAME_MAP["effective"]
+    factor_col = COLUMN_NAME_MAP["factor"]
+    ic_mean_col = COLUMN_NAME_MAP["ic_mean"]
+    icir_col = COLUMN_NAME_MAP["icir"]
+    win_rate_col = COLUMN_NAME_MAP["win_rate"]
+    p_value_col = COLUMN_NAME_MAP["p_value"]
+
+    print(f"\n有效因子（|ICIR|>0.5 且 p<0.05）: {int(report[effective_col].sum())} / {len(report)}")
 
     # Top 10 因子的 IC 时间序列
-    top10 = report[report["effective"]].head(10)["factor"].tolist()
+    top10 = report[report[effective_col]].head(10)[factor_col].tolist()
     if top10:
         print(f"\nTop 有效因子 IC 均值快览：")
         for f in top10:
-            row = report[report["factor"] == f].iloc[0]
-            print(f"  {f:45s} IC={row['ic_mean']:+.4f}  ICIR={row['icir']:+.4f}  "
-                  f"win={row['win_rate']:.1%}  p={row['p_value']:.3f}")
+            row = report[report[factor_col] == f].iloc[0]
+            print(f"  {f:45s} IC={row[ic_mean_col]:+.4f}  ICIR={row[icir_col]:+.4f}  "
+                  f"win={row[win_rate_col]:.1%}  p={row[p_value_col]:.3f}")
 
     # 保存报告
     out_path = os.path.join(os.getcwd(), "factor_ic_report.csv")
