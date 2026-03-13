@@ -160,8 +160,7 @@ adapt_score    = base_score × 100 × 主线修正系数
 
 | 因子名 | 计算逻辑 |
 |--------|----------|
-| `ma5` / `ma10` / `ma13` | 简单移动均线（近 N 日**前复权**收盘价均值，避免分红/送转跳空失真） |
-| `bias5` / `bias10` / `bias13` | 乖离率 = (close - MA) / MA × 100 |
+| `bias5` / `bias10` / `bias13` | 乖离率 = (close - MA) / MA × 100（MA 原始价格不输出，绝对价格跨股无可比性） |
 | `ma5_slope` | MA5 动能 = (MA5_D - MA5_{D-1}) / MA5_{D-1} |
 | `ma_align` | 均线排列评分：2=完美多头, 1=弱多, 0=中性, -1=弱空, -2=完美空头 |
 | `pos_20d` | 20 日价格位置 = (close - low_20d) / (high_20d - low_20d)，∈ [0,1] |
@@ -188,10 +187,10 @@ adapt_score    = base_score × 100 × 主线修正系数
 | `index_sh_pct_chg` | D 日上证指数涨跌幅 |
 | `index_sz_pct_chg` | D 日深证成指涨跌幅 |
 | `index_cyb_pct_chg` | D 日创业板指涨跌幅 |
-| `market_total_vol_d{0-4}` | D 日及近 4 个交易日全市场成交额（千元） |
+| `market_vol_ratio_d{0-4}` | 全市场成交量比率 = vol_di / mean(vol_d0..d4)，窗口内归一化，>1=放量，<1=缩量，无数据=1.0 |
 | `market_limit_up_rate` | 涨停参与率 = 涨停数 / 5200（全市场近似总股数），衡量赚钱效应广度 |
-| `market_limit_up_5d_trend` | 涨停热度趋势 = D 日涨停数 / 近 4 日均值。>1=升温，<1=降温 |
-| `market_consec_5d_trend` | 连板高度趋势 = D 日最高连板数 / 近 4 日均值。>1=情绪高度提升 |
+| `market_limit_up_5d_trend` | 涨停热度趋势 = D 日涨停数 / 近 4 日均值，clip [0.1, 10.0]；历史数据缺失时=1.0 |
+| `market_consec_5d_trend` | 连板高度趋势 = D 日最高连板数 / 近 4 日均值，clip [0.1, 10.0]；历史数据缺失时=1.0 |
 
 **小计**: 18 列
 

@@ -20,10 +20,15 @@
   index_sz_pct_chg          : D 日深证成指涨跌幅
   index_cyb_pct_chg         : D 日创业板指涨跌幅
 
+【全市场成交量比率（窗口内归一化）】
+  market_vol_ratio_d{0-4}   : vol_di / mean(vol_d0..d4)。放量>1，缩量<1，无数据=1.0
+                              5日窗口内归一化，消除绝对额的跨日期差异
+
 【派生趋势因子】
   market_limit_up_rate      : D 日涨停数 / 全市场总股数（约5200）≈ 涨停参与率
-  market_limit_up_5d_trend  : D 日涨停数 / 近4日均值，>1=热度提升，<1=冷却
-  market_consec_5d_trend    : D 日最高连板数 / 近4日均值，>1=高度提升
+  market_limit_up_5d_trend  : D 日涨停数 / 近4日均值（有效数据≥1时计算，else=1.0），
+                              clip [0.1, 10.0] 防止历史数据缺失导致极值
+  market_consec_5d_trend    : D 日最高连板数 / 近4日均值（同上），clip [0.1, 10.0]
 
 设计说明：
     - 本模块输出全局级（无 stock_code），由 FeatureEngine 通过 left join 广播到所有个股行
@@ -66,9 +71,9 @@ class MarketMacroFeature(BaseFeature):
         "market_top_cpt_up_nums", "market_top_cpt_cons_nums",
         # 指数
         "index_sh_pct_chg", "index_sz_pct_chg", "index_cyb_pct_chg",
-        # 全市场成交量（d0=当日，d1~d4=前4个交易日）
-        "market_total_vol_d0", "market_total_vol_d1", "market_total_vol_d2",
-        "market_total_vol_d3", "market_total_vol_d4",
+        # 全市场成交量比率（窗口内归一化，d0=当日，d1~d4=近4个交易日）
+        "market_vol_ratio_d0", "market_vol_ratio_d1", "market_vol_ratio_d2",
+        "market_vol_ratio_d3", "market_vol_ratio_d4",
         # 派生趋势因子
         "market_limit_up_rate", "market_limit_up_5d_trend", "market_consec_5d_trend",
     ]
@@ -123,27 +128,30 @@ class MarketMacroFeature(BaseFeature):
         for ts_code, col_name in INDEX_CODES.items():
             row[col_name] = float(idx_map.get(ts_code, 0) or 0)
 
-        # ========== 全市场成交量维度（d0=当日，d1~d4=前4个交易日）==========
-        market_vol_df   = macro_cache.get("market_vol_df", pd.DataFrame())
-        lookback_5d     = getattr(data_bundle, "lookback_dates_5d", [])
-        # kline_day 中 trade_date 存储为 YYYYMMDD，lookback_dates_5d 为 YYYY-MM-DD
+        # ========== 全市场成交量（窗口内归一化比率）==========
+        # market_vol_ratio_d{i} = vol_di / mean(vol_d0..d4)
+        # 与 stock_amount_5d_ratio 设计对称，消除绝对额跨日期差异
+        market_vol_df = macro_cache.get("market_vol_df", pd.DataFrame())
+        lookback_5d   = getattr(data_bundle, "lookback_dates_5d", [])
         if not market_vol_df.empty and "trade_date" in market_vol_df.columns and lookback_5d:
             vol_map = {
                 str(r["trade_date"]).replace("-", ""): float(r.get("market_total_vol", 0) or 0)
                 for _, r in market_vol_df.iterrows()
             }
-            # lookback_5d 按升序排列，最后一个为 D 日（d0），往前为 d1、d2…
+            # 计算5日均值（含d0）
+            all_vols = [vol_map.get(d.replace("-", ""), 0) for d in lookback_5d]
+            avg_vol  = float(np.mean(all_vols)) if any(v > 0 for v in all_vols) else 0.0
+            # lookback_5d 升序，最后一个=d0，往前=d1..d4
             for di in range(5):
-                col = f"market_total_vol_d{di}"
-                idx = len(lookback_5d) - 1 - di   # d0 → 最后一个, d4 → 第一个
+                idx = len(lookback_5d) - 1 - di
                 if 0 <= idx < len(lookback_5d):
-                    date_key = lookback_5d[idx].replace("-", "")
-                    row[col] = vol_map.get(date_key, 0)
+                    vol_val = vol_map.get(lookback_5d[idx].replace("-", ""), 0)
+                    row[f"market_vol_ratio_d{di}"] = round(vol_val / (avg_vol + 1e-6), 3) if avg_vol > 0 else 1.0
                 else:
-                    row[col] = 0
+                    row[f"market_vol_ratio_d{di}"] = 1.0
         else:
             for di in range(5):
-                row[f"market_total_vol_d{di}"] = 0
+                row[f"market_vol_ratio_d{di}"] = 1.0
 
         # ========== 派生趋势因子 ==========
         limit_up_counts_5d = macro_cache.get("limit_up_counts_5d", {})
@@ -155,15 +163,24 @@ class MarketMacroFeature(BaseFeature):
 
         if hist_dates and limit_up_counts_5d:
             hist_up_counts = [limit_up_counts_5d.get(d, 0) for d in hist_dates]
-            avg_hist_up    = np.mean(hist_up_counts) if hist_up_counts else 0
-            row["market_limit_up_5d_trend"] = round(row["market_limit_up_count"] / (avg_hist_up + 1e-6), 3)
+            avg_hist_up    = float(np.mean(hist_up_counts)) if hist_up_counts else 0.0
+            # avg_hist_up < 1 说明历史数据缺失（未入库），退化为中性 1.0 避免除以零
+            if avg_hist_up >= 1:
+                raw = row["market_limit_up_count"] / avg_hist_up
+                row["market_limit_up_5d_trend"] = round(float(np.clip(raw, 0.1, 10.0)), 3)
+            else:
+                row["market_limit_up_5d_trend"] = 1.0
         else:
             row["market_limit_up_5d_trend"] = 1.0
 
         if hist_dates and consec_max_5d:
             hist_consec     = [consec_max_5d.get(d, 0) for d in hist_dates]
-            avg_hist_consec = np.mean(hist_consec) if hist_consec else 0
-            row["market_consec_5d_trend"] = round(row["market_max_consec_num"] / (avg_hist_consec + 1e-6), 3)
+            avg_hist_consec = float(np.mean(hist_consec)) if hist_consec else 0.0
+            if avg_hist_consec >= 1:
+                raw = row["market_max_consec_num"] / avg_hist_consec
+                row["market_consec_5d_trend"] = round(float(np.clip(raw, 0.1, 10.0)), 3)
+            else:
+                row["market_consec_5d_trend"] = 1.0
         else:
             row["market_consec_5d_trend"] = 1.0
 
@@ -173,6 +190,6 @@ class MarketMacroFeature(BaseFeature):
             f"跌停:{row['market_limit_down_count']} "
             f"最高板:{row['market_max_consec_num']} "
             f"上证:{row['index_sh_pct_chg']:.2f}% "
-            f"全市场成交量(d0)單位(千元):{row['market_total_vol_d0']:.0f}"
+            f"全市场成交量比率(d0):{row['market_vol_ratio_d0']:.3f}"
         )
         return feature_df, {}

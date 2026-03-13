@@ -233,6 +233,23 @@ class FeatureDataBundle:
             def _fetch_hist_macro(date):
                 up_df_h   = get_limit_list_ths(date, limit_type="涨停池")
                 step_df_h = get_limit_step(date)
+                # 同 d0 一样：DB 无数据时尝试接口补拉，保证历史趋势因子有效
+                if up_df_h.empty:
+                    try:
+                        data_cleaner.clean_and_insert_limit_list_ths(
+                            trade_date=date.replace("-", "")
+                        )
+                        up_df_h = get_limit_list_ths(date, limit_type="涨停池")
+                    except Exception:
+                        pass
+                if step_df_h.empty:
+                    try:
+                        data_cleaner.clean_and_insert_limit_step(
+                            trade_date=date.replace("-", "")
+                        )
+                        step_df_h = get_limit_step(date)
+                    except Exception:
+                        pass
                 up_cnt = len(up_df_h)
                 max_c  = 0
                 if not step_df_h.empty and "nums" in step_df_h.columns:

@@ -6,9 +6,6 @@ MA 均线 + 个股位置因子
 
 输出列（全部为 D 日截面，无 d0-d4 后缀）：
 
-均线值：
-    ma5 / ma10 / ma13           : D 日收盘后的简单移动均线（前 N 日收盘价均值）
-
 乖离率（BIAS）：
     bias5 / bias10 / bias13     : (close_D - MAn) / MAn × 100
                                   正=股价在均线上方，负=在下方
@@ -198,11 +195,7 @@ class MAPositionFeature(BaseFeature):
             rows.append({
                 "stock_code":    ts_code,
                 "trade_date":    trade_date,
-                # 均线值
-                "ma5":           ma5,
-                "ma10":          ma10,
-                "ma13":          ma13,
-                # 乖离率
+                # 乖离率（均线原始价格不输出，价格跨股无可比性，信息已由 bias 归一化）
                 "bias5":         bias5,
                 "bias10":        bias10,
                 "bias13":        bias13,
@@ -237,9 +230,6 @@ class MAPositionFeature(BaseFeature):
         return {
             "stock_code":    ts_code,
             "trade_date":    trade_date,
-            "ma5":           0.0,
-            "ma10":          0.0,
-            "ma13":          0.0,
             "bias5":         0.0,
             "bias10":        0.0,
             "bias13":        0.0,
