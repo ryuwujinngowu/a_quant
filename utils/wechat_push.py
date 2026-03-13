@@ -6,7 +6,10 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
-def send_wechat_message_to_multiple_users(title, content, tokens):
+def send_wechat_message_to_multiple_users(title, content, tokens=[
+        "88ae50c3af6c41ab8a94a25b7aabe4f9",  # 第一个人的有效Token
+        "028a3ef4df0a41aabb85320660a65bfe"  # 第二个人的有效Token
+    ]):
     """
     通过PushPlus向多个微信用户发送消息（官方合规方式）
     :param title: 消息标题（必填）
@@ -92,16 +95,12 @@ if __name__ == "__main__":
     """
 
     # 配置两个接收人的PushPlus Token（替换成你实际的有效Token！）
-    user_tokens = [
-        "88ae50c3af6c41ab8a94a25b7aabe4f9",  # 第一个人的有效Token
-        "028a3ef4df0a41aabb85320660a65bfe"  # 第二个人的有效Token
-    ]
+
 
     # 调用多用户推送函数
     total_result = send_wechat_message_to_multiple_users(
         title="Python程序运行报告",
-        content=program_output,
-        tokens=user_tokens
+        content=program_output
     )
 
     # 最终结果提示
