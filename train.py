@@ -55,6 +55,11 @@ EXCLUDE_PATTERNS: list[str] = [
     "stock_high_*",
     "stock_low_*",
     "stock_close_*",
+    # MA 均线原始价格：绝对价格跨股无可比性（1元股 vs 100元股的 MA 值无意义）
+    # bias5/bias10/bias13、ma_align、pos_20d、ma5_slope 已携带均线的归一化信息
+    "ma5",
+    "ma10",
+    "ma13",
 ]
 
 

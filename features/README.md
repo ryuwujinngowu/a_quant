@@ -160,7 +160,8 @@ adapt_score    = base_score × 100 × 主线修正系数
 
 | 因子名 | 计算逻辑 |
 |--------|----------|
-| `bias5` / `bias10` / `bias13` | 乖离率 = (close - MA) / MA × 100（MA 原始价格不输出，绝对价格跨股无可比性） |
+| `ma5` / `ma10` / `ma13` | 均线原始价格（保留 CSV；`train.py` `EXCLUDE_PATTERNS` 默认排除，绝对价格跨股无可比性） |
+| `bias5` / `bias10` / `bias13` | 乖离率 = (close - MA) / MA × 100 |
 | `ma5_slope` | MA5 动能 = (MA5_D - MA5_{D-1}) / MA5_{D-1} |
 | `ma_align` | 均线排列评分：2=完美多头, 1=弱多, 0=中性, -1=弱空, -2=完美空头 |
 | `pos_20d` | 20 日价格位置 = (close - low_20d) / (high_20d - low_20d)，∈ [0,1] |
