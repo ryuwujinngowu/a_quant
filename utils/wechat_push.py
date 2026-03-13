@@ -12,7 +12,7 @@ def send_wechat_message(title, content):
     :param content: 消息内容
     :return: 推送结果（True/False）
     """
-    token = "028a3ef4df0a41aabb85320660a65bfe"
+    token = ""
     # PushPlus的核心API地址
     url = "http://www.pushplus.plus/send"
     # 构造推送参数
