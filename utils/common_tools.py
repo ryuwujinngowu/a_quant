@@ -395,10 +395,10 @@ def get_qfq_kline_data(trade_date: str, ts_code_list: List[str] = None) -> pd.Da
     """
     trade_date_fmt = trade_date.replace("-", "")
     if ts_code_list:
-        sql    = "SELECT ts_code, trade_date, open, high, low, close, vol, amount FROM kline_day_qfq WHERE trade_date = %s AND ts_code IN %s"
+        sql    = "SELECT ts_code, trade_date, open, high, low, close, volume, amount FROM kline_day_qfq WHERE trade_date = %s AND ts_code IN %s"
         params = (trade_date_fmt, tuple(ts_code_list))
     else:
-        sql    = "SELECT ts_code, trade_date, open, high, low, close, vol, amount FROM kline_day_qfq WHERE trade_date = %s"
+        sql    = "SELECT ts_code, trade_date, open, high, low, close, volume, amount FROM kline_day_qfq WHERE trade_date = %s"
         params = (trade_date_fmt,)
     try:
         df = db.query(sql, params=params, return_df=True)

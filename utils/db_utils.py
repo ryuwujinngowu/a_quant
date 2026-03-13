@@ -101,7 +101,7 @@ class DBConnector:
                 return pd.DataFrame.from_records(result)
             return result
         except Exception as e:
-            logger.error(f"查询失败: {e}")
+            logger.error(f"查询失败: {e}"+sql)
             return None
 
         finally:
