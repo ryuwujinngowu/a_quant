@@ -47,6 +47,7 @@ from utils.wechat_push import send_wechat_message_to_multiple_users
 # 辅助工具
 # ============================================================
 
+
 def _is_trade_date(date_str: str) -> bool:
     """判断给定日期是否为 A 股交易日"""
     try:
@@ -113,10 +114,10 @@ def run_daily_signal(trade_date: str, dry_run: bool = False) -> bool:
         if not dry_run:
             # 修改1：使用正确的函数名 send_wechat_message_to_multiple_users
             # 补充说明：如果你的函数需要指定用户列表，可添加 users 参数，例如：
-            # send_wechat_message_to_multiple_users(title=f"[量化] {trade_date} 今日非交易日", content=msg, users=["用户1", "用户2"])
+            send_wechat_message_to_multiple_users(title=f"[量化] {trade_date} 今日非交易日", content=msg)
             send_wechat_message_to_multiple_users(
                 title=f"[量化] {trade_date} 今日非交易日",
-                content=msg
+                content=msg,
             )
         return True
 
