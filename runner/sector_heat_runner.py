@@ -33,6 +33,8 @@ import os
 import sys
 from datetime import datetime
 
+from typing import Tuple
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.common_tools import get_trade_dates, get_daily_kline_data
@@ -54,7 +56,7 @@ def _is_trade_date(date_str: str) -> bool:
         return False
 
 
-def _format_signal_message(trade_date: str, buy_signals: dict) -> tuple[str, str]:
+def _format_signal_message(trade_date: str, buy_signals: dict) -> Tuple[str, str]:
     """
     将买入信号 dict 格式化为 PushPlus 推送标题 + 正文
 
