@@ -35,12 +35,14 @@ from utils.common_tools import (
 )
 from utils.db_utils import db
 from utils.log_utils import logger
-# 修改1：替换导入的函数名为 send_wechat_message_to_multiple_users
 from utils.wechat_push import send_wechat_message_to_multiple_users
 
 # 初始化核心组件
 cleaner = DataCleaner()
-
+tokens = [
+        "88ae50c3af6c41ab8a94a25b7aabe4f9",  # 第一个人的有效Token
+        "028a3ef4df0a41aabb85320660a65bfe"  # 第二个人的有效Token
+ ]
 # ======================== 配置参数 ========================
 START_HOUR   = 15      # 每日开始尝试时间（小时）
 START_MINUTE = 30      # 每日开始尝试时间（分钟）
@@ -388,7 +390,7 @@ def run_server():
                     logger.info("数据更新成功！")
                     try:
                         # 修改2：替换为 send_wechat_message_to_multiple_users
-                        send_wechat_message_to_multiple_users(f"【量化数据更新成功】{today_str}", push_msg)
+                        send_wechat_message_to_multiple_users(f"【量化数据更新成功】{today_str}", push_msg, tokens)
                     except Exception as e:
                         logger.error(f"成功推送失败：{e}", exc_info=True)
                     last_success_date = today_str
@@ -404,7 +406,7 @@ def run_server():
                             # 修改3：替换为 send_wechat_message_to_multiple_users
                             send_wechat_message_to_multiple_users(
                                 f"【量化数据更新异常】{today_str}",
-                                push_msg + f"\n\n⚠️ 将每 {RETRY_INTERVAL//60} 分钟自动重试，最多 {MAX_RETRY_TIMES} 次",
+                                push_msg + f"\n\n⚠️ 将每 {RETRY_INTERVAL//60} 分钟自动重试，最多 {MAX_RETRY_TIMES} 次",tokens
                             )
                         except Exception as e:
                             logger.error(f"首次失败推送失败：{e}", exc_info=True)
@@ -421,8 +423,7 @@ def run_server():
                 # 修改4：替换为 send_wechat_message_to_multiple_users
                 send_wechat_message_to_multiple_users(
                     f"【量化数据更新失败】{today_str}",
-                    f"❌ 今日已重试 {MAX_RETRY_TIMES} 次仍未达到数据完整性要求\n请手动检查数据库或接口状态",
-                )
+                    f"❌ 今日已重试 {MAX_RETRY_TIMES} 次仍未达到数据完整性要求\n请手动检查数据库或接口状态", tokens)
             except Exception as e:
                 logger.error(f"最终失败推送失败：{e}", exc_info=True)
             # 标记今日已处理，防止无限循环卡死
