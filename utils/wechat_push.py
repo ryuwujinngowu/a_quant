@@ -2,52 +2,68 @@ import requests
 import json
 import sys
 import os
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
-def send_wechat_message(title, content):
+def send_wechat_message_to_multiple_users(title, content, tokens):
     """
-    通过PushPlu通过s向微信发送消息
+    通过PushPlus向多个微信用户发送消息（官方合规方式）
     :param title: 消息标题（必填）
     :param content: 消息内容
-    :return: 推送结果（True/False）
+    :param tokens: 接收人的PushPlus Token列表，如["token1", "token2"]
+    :return: 整体推送结果（True=全部成功/False=至少一个失败）
     """
-    token = "028a3ef4df0a41aabb85320660a65bfe"
     # PushPlus的核心API地址
     url = "http://www.pushplus.plus/send"
-    # 构造推送参数
-    data = {
-        "token": token,
-        "title": title,
-        "content": content,
-        "template": "txt"  # 消息格式：txt(纯文本)/markdown(富文本)
-    }
+    # 记录每个用户的推送结果
+    push_results = []
 
-    try:
-        # 发送POST请求
-        response = requests.post(
-            url=url,
-            data=json.dumps(data),
-            headers={"Content-Type": "application/json"}
-        )
-        # 解析响应结果
-        result = response.json()
-        if result["code"] == 200:
-            print("✅ 消息推送成功！")
-            return True
-        else:
-            print(f"❌ 消息推送失败：{result['msg']}")
-            return False
-    except Exception as e:
-        print(f"❌ 推送过程出错：{str(e)}")
+    if not tokens:
+        print("❌ 未配置任何用户Token！")
         return False
+
+    for idx, token in enumerate(tokens, 1):
+        if not token:
+            print(f"❌ 第{idx}个用户的Token为空，跳过推送")
+            push_results.append(False)
+            continue
+
+        # 构造单用户推送参数（符合官方文档要求）
+        data = {
+            "token": token,  # 单个用户的Token（官方仅支持单个）
+            "title": title,
+            "content": content,
+            "template": "txt"  # 消息格式：txt(纯文本)/markdown(富文本)
+        }
+
+        try:
+            # 发送POST请求（单用户）
+            response = requests.post(
+                url=url,
+                data=json.dumps(data),
+                headers={"Content-Type": "application/json"},
+                timeout=10  # 增加超时控制，避免卡壳
+            )
+            # 解析响应结果
+            result = response.json()
+            if result["code"] == 200:
+                print(f"✅ 第{idx}个用户消息推送成功！")
+                push_results.append(True)
+            else:
+                print(f"❌ 第{idx}个用户推送失败：{result['msg']}（Token：{token[:8]}...）")
+                push_results.append(False)
+        except Exception as e:
+            print(f"❌ 第{idx}个用户推送过程出错：{str(e)}（Token：{token[:8]}...）")
+            push_results.append(False)
+
+    # 整体结果：全部成功才返回True，否则False
+    return all(push_results)
 
 
 # 主程序：模拟Python程序输出并推送
 if __name__ == "__main__":
-
-
-    # 模拟Python程序的输出内容（替换成你实际的程序输出即可）
+    # 模拟Python程序的输出内容
     program_output = """
 ✅回测完成，核心指标汇总：
 ✅ 策略名称：涨停回马枪策略
@@ -65,37 +81,31 @@ if __name__ == "__main__":
 ✅ 总交易次数：25
 ✅回测交易日数：21
 ✅ ============================================================
-✅ ============================================================
-✅ 【盈利最多的Top10股票】
-✅ ============================================================
+✅ 【盈利最多的Top10股票】（实际均亏损）
 ✅  1. 000905.SZ：累计净盈亏 -15269.21 元
 ✅   2. 003037.SZ：累计净盈亏 -15882.87 元
-✅  3. 002268.SZ：累计净盈亏 -16557.57 元
-✅   4. 002394.SZ：累计净盈亏 -26671.25 元
-✅  5. 600133.SH：累计净盈亏 -27457.63 元
-✅  6. 688273.SH：累计净盈亏 -27824.31 元
-✅  7. 300773.SZ：累计净盈亏 -31889.0 元
-✅   8. 000603.SZ：累计净盈亏 -35437.91 元
-✅  9. 000516.SZ：累计净盈亏 -35702.6 元
-✅  10. 300430.SZ：累计净盈亏 -39080.18 元
 ✅ ============================================================
 ✅ 【亏损最多的Top10股票】
-✅ ============================================================
 ✅  1. 000409.SZ：累计净盈亏 -58391.42 元
 ✅  2. 001231.SZ：累计净盈亏 -55399.46 元
-✅   3. 002171.SZ：累计净盈亏 -54924.38 元
-✅   4. 002264.SZ：累计净盈亏 -52727.2 元
-✅ 5. 002151.SZ：累计净盈亏 -52257.92 元
-✅  6. 002446.SZ：累计净盈亏 -50382.42 元
-✅  7. 300404.SZ：累计净盈亏 -48105.87 元
-✅  8. 000981.SZ：累计净盈亏 -44705.07 元
-✅   9. 002413.SZ：累计净盈亏 -44374.29 元
-✅  10. 300291.SZ：累计净盈亏 -42630.08 元
 ✅- ============================================================
     """
 
-    # 调用推送函数
-    send_wechat_message(
-        title="Python程序运行报告",  # 消息标题
-        content=program_output  # 程序输出内容
+    # 配置两个接收人的PushPlus Token（替换成你实际的有效Token！）
+    user_tokens = [
+        "88ae50c3af6c41ab8a94a25b7aabe4f9",  # 第一个人的有效Token
+        "028a3ef4df0a41aabb85320660a65bfe"  # 第二个人的有效Token
+    ]
+
+    # 调用多用户推送函数
+    total_result = send_wechat_message_to_multiple_users(
+        title="Python程序运行报告",
+        content=program_output,
+        tokens=user_tokens
     )
+
+    # 最终结果提示
+    if total_result:
+        print("🎉 所有用户都推送成功！")
+    else:
+        print("⚠️ 部分用户推送失败，请检查Token是否正确！")

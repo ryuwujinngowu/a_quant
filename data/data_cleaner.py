@@ -744,7 +744,7 @@ class DataCleaner:
             table_name: str = "limit_list_ths"
     ) -> Optional[int]:
         """涨跌停池数据清洗入库"""
-        logger.info(f"===== 开始涨跌停池数据入库 | trade_date={trade_date} limit_type={limit_type} =====")
+        logger.debug(f"===== 开始涨跌停池数据入库 | trade_date={trade_date} limit_type={limit_type} =====")
 
         raw_df = data_fetcher.fetch_limit_list_ths(
             trade_date=trade_date, limit_type=limit_type,

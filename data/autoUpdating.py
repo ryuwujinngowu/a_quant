@@ -35,7 +35,8 @@ from utils.common_tools import (
 )
 from utils.db_utils import db
 from utils.log_utils import logger
-from utils.wechat_push import send_wechat_message
+# 修改1：替换导入的函数名为 send_wechat_message_to_multiple_users
+from utils.wechat_push import send_wechat_message_to_multiple_users
 
 # 初始化核心组件
 cleaner = DataCleaner()
@@ -386,7 +387,8 @@ def run_server():
                     # 成功：推送一次，标记完成
                     logger.info("数据更新成功！")
                     try:
-                        send_wechat_message(f"【量化数据更新成功】{today_str}", push_msg)
+                        # 修改2：替换为 send_wechat_message_to_multiple_users
+                        send_wechat_message_to_multiple_users(f"【量化数据更新成功】{today_str}", push_msg)
                     except Exception as e:
                         logger.error(f"成功推送失败：{e}", exc_info=True)
                     last_success_date = today_str
@@ -399,7 +401,8 @@ def run_server():
                     # 失败推送：仅第 1 次失败时推送，避免消息轰炸
                     if retry_count == 1:
                         try:
-                            send_wechat_message(
+                            # 修改3：替换为 send_wechat_message_to_multiple_users
+                            send_wechat_message_to_multiple_users(
                                 f"【量化数据更新异常】{today_str}",
                                 push_msg + f"\n\n⚠️ 将每 {RETRY_INTERVAL//60} 分钟自动重试，最多 {MAX_RETRY_TIMES} 次",
                             )
@@ -415,7 +418,8 @@ def run_server():
         if not update_success:
             logger.error(f"[{today_str}] 已重试 {MAX_RETRY_TIMES} 次，停止，请手动处理")
             try:
-                send_wechat_message(
+                # 修改4：替换为 send_wechat_message_to_multiple_users
+                send_wechat_message_to_multiple_users(
                     f"【量化数据更新失败】{today_str}",
                     f"❌ 今日已重试 {MAX_RETRY_TIMES} 次仍未达到数据完整性要求\n请手动检查数据库或接口状态",
                 )

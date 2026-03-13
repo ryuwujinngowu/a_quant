@@ -21,7 +21,7 @@
 
 云端 Linux 定时触发（crontab）：
   # 每个工作日 14:45 触发（北京时间）
-  45 14 * * 1-5 cd /home/user/a_quant && python runner/sector_heat_runner.py >> logs/runner.log 2>&1
+  00 05 * * 1-5 cd /home/user/a_quant && python runner/sector_heat_runner.py >> logs/runner.log 2>&1
 
 依赖前置：
   1. 已运行 python learnEngine/dataset.py 生成训练集
@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.common_tools import get_trade_dates, get_daily_kline_data
 from utils.log_utils import logger
-from utils.wechat_push import send_wechat_message
+# 修正：保持导入名称正确，后续调用统一使用这个名称
+from utils.wechat_push import send_wechat_message_to_multiple_users
 
 
 # ============================================================
@@ -108,7 +109,13 @@ def run_daily_signal(trade_date: str, dry_run: bool = False) -> bool:
         msg = f"[Runner] {trade_date} 非交易日，跳过执行"
         logger.info(msg)
         if not dry_run:
-            send_wechat_message(f"[量化] {trade_date} 今日非交易日", msg)
+            # 修改1：使用正确的函数名 send_wechat_message_to_multiple_users
+            # 补充说明：如果你的函数需要指定用户列表，可添加 users 参数，例如：
+            # send_wechat_message_to_multiple_users(title=f"[量化] {trade_date} 今日非交易日", content=msg, users=["用户1", "用户2"])
+            send_wechat_message_to_multiple_users(
+                title=f"[量化] {trade_date} 今日非交易日",
+                content=msg
+            )
         return True
 
     # ── Step 2: 获取当日全市场日线（策略构建候选池需要）────────────────────
@@ -117,7 +124,11 @@ def run_daily_signal(trade_date: str, dry_run: bool = False) -> bool:
         msg = f"[Runner] {trade_date} 无法获取日线数据，跳过"
         logger.warning(msg)
         if not dry_run:
-            send_wechat_message(f"[量化] {trade_date} 数据异常", msg)
+            # 修改2：同上，修正函数调用名
+            send_wechat_message_to_multiple_users(
+                title=f"[量化] {trade_date} 数据异常",
+                content=msg
+            )
         return False
 
     logger.info(f"[Runner] 日线数据加载完成 | {len(daily_df)} 只股票")
@@ -133,7 +144,11 @@ def run_daily_signal(trade_date: str, dry_run: bool = False) -> bool:
         msg = f"[Runner] 策略执行异常: {e}"
         logger.error(msg, exc_info=True)
         if not dry_run:
-            send_wechat_message(f"[量化] {trade_date} 策略执行异常", msg)
+            # 修改3：同上，修正函数调用名
+            send_wechat_message_to_multiple_users(
+                title=f"[量化] {trade_date} 策略执行异常",
+                content=msg
+            )
         return False
 
     # ── Step 4: 格式化 + 推送 ────────────────────────────────────────────
@@ -144,7 +159,8 @@ def run_daily_signal(trade_date: str, dry_run: bool = False) -> bool:
         logger.info(f"[Runner][DRY-RUN] 正文:\n{content}")
         return True
 
-    success = send_wechat_message(title, content)
+    # 修改4：核心推送逻辑，修正函数调用名
+    success = send_wechat_message_to_multiple_users(title, content)
     if success:
         logger.info(f"[Runner] 推送成功 | {title}")
     else:
