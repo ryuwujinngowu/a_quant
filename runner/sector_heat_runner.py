@@ -20,7 +20,7 @@
   python runner/sector_heat_runner.py --dry-run
 
 云端 Linux 定时触发（crontab）：
-  # 每个工作日 14:45 触发（北京时间）
+    每工作日凌晨5点出触发
   00 05 * * 1-5 cd /home/user/a_quant && python runner/sector_heat_runner.py >> logs/runner.log 2>&1
 
 依赖前置：
