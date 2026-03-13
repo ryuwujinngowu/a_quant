@@ -20,6 +20,11 @@
   index_sz_pct_chg          : D 日深证成指涨跌幅
   index_cyb_pct_chg         : D 日创业板指涨跌幅
 
+【派生趋势因子】
+  market_limit_up_rate      : D 日涨停数 / 全市场总股数（约5200）≈ 涨停参与率
+  market_limit_up_5d_trend  : D 日涨停数 / 近4日均值，>1=热度提升，<1=冷却
+  market_consec_5d_trend    : D 日最高连板数 / 近4日均值，>1=高度提升
+
 设计说明：
     - 本模块输出全局级（无 stock_code），由 FeatureEngine 通过 left join 广播到所有个股行
     - 数据来源：limit_list_ths / limit_step / limit_cpt_list / index_daily 四张表
@@ -27,12 +32,16 @@
     - 后续可在此文件中继续新增其他宏观维度因子（如融资融券余额、北向资金等）
 """
 from typing import Dict
+import numpy as np
 import pandas as pd
 
 from features.base_feature import BaseFeature
 from features.feature_registry import feature_registry
 from utils.log_utils import logger
 
+
+# A 股上市股票总数近似值（用于涨停参与率计算）
+TOTAL_LISTED_APPROX = 5200
 
 # 关注的核心指数代码
 INDEX_CODES = {
@@ -60,6 +69,8 @@ class MarketMacroFeature(BaseFeature):
         # 全市场成交量（d0=当日，d1~d4=前4个交易日）
         "market_total_vol_d0", "market_total_vol_d1", "market_total_vol_d2",
         "market_total_vol_d3", "market_total_vol_d4",
+        # 派生趋势因子
+        "market_limit_up_rate", "market_limit_up_5d_trend", "market_consec_5d_trend",
     ]
 
     def calculate(self, data_bundle) -> tuple:
@@ -133,6 +144,28 @@ class MarketMacroFeature(BaseFeature):
         else:
             for di in range(5):
                 row[f"market_total_vol_d{di}"] = 0
+
+        # ========== 派生趋势因子 ==========
+        limit_up_counts_5d = macro_cache.get("limit_up_counts_5d", {})
+        consec_max_5d      = macro_cache.get("consec_max_5d", {})
+        lookback_5d        = getattr(data_bundle, "lookback_dates_5d", [])
+        hist_dates         = lookback_5d[:-1] if len(lookback_5d) > 1 else []  # d1~d4
+
+        row["market_limit_up_rate"] = round(row["market_limit_up_count"] / TOTAL_LISTED_APPROX, 4)
+
+        if hist_dates and limit_up_counts_5d:
+            hist_up_counts = [limit_up_counts_5d.get(d, 0) for d in hist_dates]
+            avg_hist_up    = np.mean(hist_up_counts) if hist_up_counts else 0
+            row["market_limit_up_5d_trend"] = round(row["market_limit_up_count"] / (avg_hist_up + 1e-6), 3)
+        else:
+            row["market_limit_up_5d_trend"] = 1.0
+
+        if hist_dates and consec_max_5d:
+            hist_consec     = [consec_max_5d.get(d, 0) for d in hist_dates]
+            avg_hist_consec = np.mean(hist_consec) if hist_consec else 0
+            row["market_consec_5d_trend"] = round(row["market_max_consec_num"] / (avg_hist_consec + 1e-6), 3)
+        else:
+            row["market_consec_5d_trend"] = 1.0
 
         feature_df = pd.DataFrame([row])
         logger.info(

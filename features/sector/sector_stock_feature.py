@@ -4,7 +4,11 @@
 输出因子全览（每个交易日 d0~d4 各输出一组）：
 
 【原始行情】
-  stock_open/high/low/close/pct_chg/amount_{d}
+  stock_open/high/low/close/pct_chg_{d}
+
+【量能比因子】
+  stock_amount_5d_ratio_{d} : 成交额量级比 = 当日成交额 / 近5日均额
+                              放量>1，缩量<1，停牌=0（消除跨股绝对额差异）
 
 【情绪合成分（保留，与原子因子并存）】
   stock_profit_{d}      : 上涨日 SEI；下跌/平盘日 = 0
@@ -124,8 +128,8 @@ class SectorStockFeature(BaseFeature):
         *[f"stock_high_{t}"          for t in _day_tags],
         *[f"stock_low_{t}"           for t in _day_tags],
         *[f"stock_close_{t}"         for t in _day_tags],
-        *[f"stock_pct_chg_{t}"       for t in _day_tags],
-        *[f"stock_amount_{t}"        for t in _day_tags],
+        *[f"stock_pct_chg_{t}"            for t in _day_tags],
+        *[f"stock_amount_5d_ratio_{t}"   for t in _day_tags],
         *[f"stock_profit_{t}"        for t in _day_tags],
         *[f"stock_loss_{t}"          for t in _day_tags],
         *[f"stock_hdi_{t}"           for t in _day_tags],
@@ -175,6 +179,24 @@ class SectorStockFeature(BaseFeature):
         ]
         avg_vol = np.mean(vols) if vols else 0.0
         return round(today_vol / (avg_vol + 1e-6), 3)
+
+    @staticmethod
+    def _calc_amount_ratio(ts_code: str, target_date: str,
+                           all_dates_5d: List[str], daily_grouped: dict) -> float:
+        """成交额量级比 = 当日成交额 / 近5日（含当日）平均成交额（消除跨股绝对额差异）"""
+        today_row = daily_grouped.get((ts_code, target_date))
+        if not today_row:
+            return 0.0
+        today_amt = float(today_row.get("amount", 0) or 0)
+        if today_amt == 0:
+            return 0.0
+        amts = [
+            float(daily_grouped[(ts_code, d)].get("amount", 0) or 0)
+            for d in all_dates_5d
+            if (ts_code, d) in daily_grouped
+        ]
+        avg_amt = np.mean(amts) if amts else 0.0
+        return round(today_amt / (avg_amt + 1e-6), 3)
 
     # ------------------------------------------------------------------ #
     # 主计算入口
@@ -339,19 +361,21 @@ class SectorStockFeature(BaseFeature):
 
                     # ---- 原始行情 ----
                     if daily_data:
-                        row[f"stock_open_{day_tag}"]    = daily_data.get("open",    d0_data.get("open",    0))
-                        row[f"stock_high_{day_tag}"]    = daily_data.get("high",    d0_data.get("high",    0))
-                        row[f"stock_low_{day_tag}"]     = daily_data.get("low",     d0_data.get("low",     0))
-                        row[f"stock_close_{day_tag}"]   = daily_data.get("close",   d0_data.get("close",   0))
-                        row[f"stock_pct_chg_{day_tag}"] = daily_data.get("pct_chg", 0.0)
-                        row[f"stock_amount_{day_tag}"]  = daily_data.get("amount",  0.0)
+                        row[f"stock_open_{day_tag}"]             = daily_data.get("open",    d0_data.get("open",    0))
+                        row[f"stock_high_{day_tag}"]             = daily_data.get("high",    d0_data.get("high",    0))
+                        row[f"stock_low_{day_tag}"]              = daily_data.get("low",     d0_data.get("low",     0))
+                        row[f"stock_close_{day_tag}"]            = daily_data.get("close",   d0_data.get("close",   0))
+                        row[f"stock_pct_chg_{day_tag}"]          = daily_data.get("pct_chg", 0.0)
+                        row[f"stock_amount_5d_ratio_{day_tag}"]  = self._calc_amount_ratio(
+                            ts_code, target_date, all_dates_5d, daily_grouped
+                        )
                     else:
-                        row[f"stock_open_{day_tag}"]    = d0_data.get("open",  0)
-                        row[f"stock_high_{day_tag}"]    = d0_data.get("high",  0)
-                        row[f"stock_low_{day_tag}"]     = d0_data.get("low",   0)
-                        row[f"stock_close_{day_tag}"]   = d0_data.get("close", 0)
-                        row[f"stock_pct_chg_{day_tag}"] = 0.0
-                        row[f"stock_amount_{day_tag}"]  = 0.0
+                        row[f"stock_open_{day_tag}"]             = d0_data.get("open",  0)
+                        row[f"stock_high_{day_tag}"]             = d0_data.get("high",  0)
+                        row[f"stock_low_{day_tag}"]              = d0_data.get("low",   0)
+                        row[f"stock_close_{day_tag}"]            = d0_data.get("close", 0)
+                        row[f"stock_pct_chg_{day_tag}"]          = 0.0
+                        row[f"stock_amount_5d_ratio_{day_tag}"]  = 0.0
 
                     # ---- 情绪合成分 + 全量原子因子 ----
                     if daily_data and cache:

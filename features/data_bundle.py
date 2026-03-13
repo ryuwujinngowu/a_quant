@@ -217,6 +217,38 @@ class FeatureDataBundle:
             # ── 全市场成交量（kline_day 聚合，依赖 kline_day 已落库）──────────
             self.macro_cache["market_vol_df"] = get_market_total_volume(self.lookback_dates_5d)
 
+            # ── 5日历史涨停数量 / 最大连板数（d1-d4，用于派生趋势因子）────────
+            # d0 已有完整数据，直接从已加载结果读取；d1-d4 并发查询历史
+            _d0_up_count   = len(limit_up_df)
+            _d0_max_consec = 0
+            if not limit_step_df.empty and "nums" in limit_step_df.columns:
+                _nums = pd.to_numeric(limit_step_df["nums"], errors="coerce").dropna()
+                _d0_max_consec = int(_nums.max()) if len(_nums) > 0 else 0
+
+            limit_up_counts_5d: dict = {td: _d0_up_count}
+            consec_max_5d:      dict = {td: _d0_max_consec}
+
+            hist_dates = self.lookback_dates_5d[:-1]   # d1~d4（不含d0）
+
+            def _fetch_hist_macro(date):
+                up_df_h   = get_limit_list_ths(date, limit_type="涨停池")
+                step_df_h = get_limit_step(date)
+                up_cnt = len(up_df_h)
+                max_c  = 0
+                if not step_df_h.empty and "nums" in step_df_h.columns:
+                    _n = pd.to_numeric(step_df_h["nums"], errors="coerce").dropna()
+                    max_c = int(_n.max()) if len(_n) > 0 else 0
+                return date, up_cnt, max_c
+
+            if hist_dates:
+                with ThreadPoolExecutor(max_workers=min(4, len(hist_dates))) as pool:
+                    for _date, _up_cnt, _max_c in pool.map(_fetch_hist_macro, hist_dates):
+                        limit_up_counts_5d[_date] = _up_cnt
+                        consec_max_5d[_date]      = _max_c
+
+            self.macro_cache["limit_up_counts_5d"] = limit_up_counts_5d
+            self.macro_cache["consec_max_5d"]      = consec_max_5d
+
             logger.info(
                 f"[DataBundle] 宏观数据加载完成 | "
                 f"涨停:{len(self.macro_cache['limit_up_df'])} "

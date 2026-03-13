@@ -31,14 +31,14 @@ FeatureDataBundle(trade_date, target_ts_codes, ...)
   ├─ _load_trade_dates()     → lookback_dates_5d / 20d
   ├─ _load_daily_data()      → daily_grouped dict（O(1) 查找，20 日不复权）
   ├─ _load_qfq_data()        → qfq_daily_grouped dict（20 日前复权，MA 专用）
-  ├─ _load_macro_data()      → macro_cache（涨跌停/连板/板块/指数）
+  ├─ _load_macro_data()      → macro_cache（涨跌停/连板/板块/指数/5日历史趋势）
   └─ _load_minute_data()     → minute_cache（候选股近 5 日分钟线）
   ↓
 FeatureEngine.run_single_date(data_bundle)
   ├─ sector_heat.calculate()      → 全局因子（adapt_score + 板块赚亏效应）
   ├─ sector_stock.calculate()     → 个股因子（120+ 列）
   ├─ ma_position.calculate()      → 个股因子（11 列）
-  └─ market_macro.calculate()     → 全局因子（9 列）
+  └─ market_macro.calculate()     → 全局因子（18 列）
   ↓
   个股级 inner join → 全局级 left join → feature_df
 ```
@@ -78,13 +78,12 @@ adapt_score    = base_score × 100 × 主线修正系数
 **文件**: `sector/sector_stock_feature.py`
 **输出类型**: 个股级（含 stock_code），d0~d4 共 5 日各生成一组
 
-#### 原始行情（6×5=30 列）
+#### 原始行情（5×5=25 列）
 
 | 因子名 | 计算逻辑 |
 |--------|----------|
-| `stock_open/high/low/close_{d}` | 当日 OHLC |
+| `stock_open/high/low/close_{d}` | 当日 OHLC（4 列×5 日=20 列；可通过 `train.py` 中 `EXCLUDE_PATTERNS` 过滤） |
 | `stock_pct_chg_{d}` | 当日涨跌幅 |
-| `stock_amount_{d}` | 当日成交额 |
 
 #### 情绪合成分（3×5=15 列）
 
@@ -128,17 +127,18 @@ adapt_score    = base_score × 100 × 主线修正系数
 |--------|------|----------|
 | `stock_red_time_ratio_{d}` | [0,1] | 分钟线中 close > pre_close（昨收）的比例 |
 | `stock_float_profit_time_ratio_{d}` | [0,1] | 分钟线中 close > 昨日 VWAP 的比例（浮盈时间） |
-| `stock_red_session_pm_ratio_{d}` | [0,1] | 红盘分钟中处于午盘（13:00-15:00）的比例；0=早盘主导，0.5=均衡/无红盘，1=午盘主导 |
-| `stock_float_session_pm_ratio_{d}` | [0,1] | 浮盈分钟中处于午盘的比例；编码含义同上 |
+| `stock_red_session_pm_ratio_{d}` | [-1,1] | 红盘分钟中处于午盘（13:00-15:00）的比例；-1=全天无红盘（最弱），0=早盘主导，0.5=均衡，1=午盘主导（最强）；无分钟线=0.5（中性） |
+| `stock_float_session_pm_ratio_{d}` | [-1,1] | 浮盈分钟中处于午盘的比例；编码含义同上 |
 
-> **昨日 VWAP 计算**：`kline_day.amount（千元）× 1000 / (kline_day.vol（手）× 100)` = `amount × 10 / vol`（元/股）
+> **昨日 VWAP 计算**：`kline_day.amount（千元）× 1000 / (kline_day.volume（手）× 100)` = `amount × 10 / volume`（元/股）
 > 当昨日 VWAP 无法计算时（新股/D-1 停牌），回退使用 pre_close 作为参考价。
 
-#### 量能因子（1×5=5 列）
+#### 量能因子（2×5=10 列）
 
 | 因子名 | 计算逻辑 |
 |--------|----------|
 | `stock_vol_ratio_{d}` | 量比 = 当日成交量 / 近 5 日均量。放量>1，缩量<1，停牌=0 |
+| `stock_amount_5d_ratio_{d}` | 成交额量级比 = 当日成交额 / 近 5 日均额。消除跨股绝对额差异，放量>1，缩量<1，停牌=0 |
 
 #### 板块均值 + 排名（2×5+1=11 列）
 
@@ -148,7 +148,7 @@ adapt_score    = base_score × 100 × 主线修正系数
 | `sector_avg_loss_{d}` | 该板块当日下跌股的 100-SEI 均值 |
 | `stock_sector_20d_rank` | 个股在所属板块内的 20 日涨幅排名 |
 
-**小计**: ~140 列
+**小计**: ~141 列（stock_amount 替换为 stock_amount_5d_ratio）
 
 ---
 
@@ -188,8 +188,12 @@ adapt_score    = base_score × 100 × 主线修正系数
 | `index_sh_pct_chg` | D 日上证指数涨跌幅 |
 | `index_sz_pct_chg` | D 日深证成指涨跌幅 |
 | `index_cyb_pct_chg` | D 日创业板指涨跌幅 |
+| `market_total_vol_d{0-4}` | D 日及近 4 个交易日全市场成交额（千元） |
+| `market_limit_up_rate` | 涨停参与率 = 涨停数 / 5200（全市场近似总股数），衡量赚钱效应广度 |
+| `market_limit_up_5d_trend` | 涨停热度趋势 = D 日涨停数 / 近 4 日均值。>1=升温，<1=降温 |
+| `market_consec_5d_trend` | 连板高度趋势 = D 日最高连板数 / 近 4 日均值。>1=情绪高度提升 |
 
-**小计**: 9 列
+**小计**: 18 列
 
 ---
 

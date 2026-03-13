@@ -18,6 +18,7 @@
 import os
 import sys
 import warnings
+from fnmatch import fnmatch
 
 import numpy as np
 import pandas as pd
@@ -45,6 +46,15 @@ EXCLUDE_COLS = [
     "stock_code", "trade_date",
     "label1", "label2",
     "sector_name", "top3_sectors",
+]
+
+# 因子过滤模式（fnmatch 通配符）：匹配到的列将被排除在训练特征之外
+# 修改此处即可在不重新生成 CSV 的情况下切换因子组合，无需重跑 dataset.py
+EXCLUDE_PATTERNS: list[str] = [
+    "stock_open_*",
+    "stock_high_*",
+    "stock_low_*",
+    "stock_close_*",
 ]
 
 
@@ -83,6 +93,12 @@ def load_and_prepare(csv_path: str, target_label: str):
     feature_cols = [c for c in df.columns if c not in EXCLUDE_COLS]
     # 仅保留数值型列
     feature_cols = [c for c in feature_cols if pd.api.types.is_numeric_dtype(df[c])]
+
+    # EXCLUDE_PATTERNS 过滤（fnmatch 通配符，不影响 CSV 生成）
+    if EXCLUDE_PATTERNS:
+        feature_cols = [c for c in feature_cols
+                        if not any(fnmatch(c, pat) for pat in EXCLUDE_PATTERNS)]
+        logger.info(f"EXCLUDE_PATTERNS 过滤后特征列数: {len(feature_cols)}")
 
     X = df[feature_cols].copy()
     y = df[target_label].astype(int).values
