@@ -178,10 +178,11 @@ class SEIFeature(BaseFeature):
             "break_times":             0,
             "seal_times":              0,
             "lift_times":              0,
-            # 时间持续类因子（无分钟线时填中性值 0.5）
+            # 时间持续类因子（无分钟线时无法判断，填中性未知值 0.5）
+            # 注意：0.5 ≠ 无红盘（无红盘时 session_pm_ratio = -1），此处是真正"不可知"
             "red_time_ratio":          0.5,
             "float_profit_time_ratio": 0.5,
-            "red_session_pm_ratio":    0.5,
+            "red_session_pm_ratio":    0.5,   # 无分钟线 → 未知，0.5 中性
             "float_session_pm_ratio":  0.5,
             "day_close":               close_price,
         }
@@ -312,7 +313,9 @@ class SEIFeature(BaseFeature):
             am_red = int((red_mask & am_mask).sum())
             pm_red = int((red_mask & pm_mask).sum())
             _red_tot            = am_red + pm_red
-            red_session_pm_ratio = pm_red / (_red_tot + 1e-9) if _red_tot > 0 else 0.5
+            # 无红盘 → -1（语义最弱，区别于"早盘主导 0"和"均衡 0.5"）
+            # 有红盘 → pm比例 ∈ [0,1]：0=全早盘，0.5=均衡，1=全午盘
+            red_session_pm_ratio = pm_red / (_red_tot + 1e-9) if _red_tot > 0 else -1.0
 
             # 浮盈（高于昨日 VWAP）；vwap_prev=0 时降级用昨收
             _vwap_ref           = vwap_prev if vwap_prev and vwap_prev > 0 else pre_close
@@ -321,11 +324,11 @@ class SEIFeature(BaseFeature):
             am_flt = int((float_mask & am_mask).sum())
             pm_flt = int((float_mask & pm_mask).sum())
             _flt_tot               = am_flt + pm_flt
-            float_session_pm_ratio = pm_flt / (_flt_tot + 1e-9) if _flt_tot > 0 else 0.5
+            float_session_pm_ratio = pm_flt / (_flt_tot + 1e-9) if _flt_tot > 0 else -1.0
         else:
             red_time_ratio         = 0.5
             float_profit_time_ratio = 0.5
-            red_session_pm_ratio   = 0.5
+            red_session_pm_ratio   = 0.5   # 无分钟线 = 未知，保持中性
             float_session_pm_ratio = 0.5
 
         # ---- HDI 合成 ----

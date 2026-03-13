@@ -105,7 +105,10 @@ ATOMIC_NEUTRAL = {
 
 # 停牌时的填充值（语义：该股无行情，成交量 = 0）
 SUSPENDED_FILL = dict(ATOMIC_NEUTRAL)
-SUSPENDED_FILL["vol_ratio"] = 0.0    # 停牌量为 0，量比=0 有明确语义
+SUSPENDED_FILL["vol_ratio"]              = 0.0    # 停牌量为 0，量比=0 有明确语义
+# 停牌 = 确定无红盘/浮盈 → session 偏向设为 -1（区别于 ATOMIC_NEUTRAL 的 0.5 未知值）
+SUSPENDED_FILL["red_session_pm_ratio"]   = -1.0
+SUSPENDED_FILL["float_session_pm_ratio"] = -1.0
 
 
 @feature_registry.register("sector_stock")
@@ -157,15 +160,16 @@ class SectorStockFeature(BaseFeature):
     @staticmethod
     def _calc_vol_ratio(ts_code: str, target_date: str,
                         all_dates_5d: List[str], daily_grouped: dict) -> float:
-        """量比 = 当日成交量 / 近5日（含当日）均量"""
+        """量比 = 当日成交量 / 近5日（含当日）均量
+        注意：kline_day 表中成交量列名为 volume（data_cleaner 入库时已从 vol 重命名）"""
         today_row = daily_grouped.get((ts_code, target_date))
         if not today_row:
             return 0.0
-        today_vol = float(today_row.get("vol", 0) or 0)
+        today_vol = float(today_row.get("volume", 0) or 0)  # ← 列名 volume，非 vol
         if today_vol == 0:
             return 0.0
         vols = [
-            float(daily_grouped[(ts_code, d)].get("vol", 0) or 0)
+            float(daily_grouped[(ts_code, d)].get("volume", 0) or 0)
             for d in all_dates_5d
             if (ts_code, d) in daily_grouped
         ]
@@ -248,15 +252,16 @@ class SectorStockFeature(BaseFeature):
                 down_limit = calc_limit_down_price(ts_code, pre_close)
                 minute_df  = minute_cache.get(daily_key, pd.DataFrame())
 
-                # 昨日 VWAP（元/股）= amount(千元) × 1000 / (vol(手) × 100股/手)
-                #                  = amount × 10 / vol
+                # 昨日 VWAP（元/股）= amount(千元) × 1000 / (volume(手) × 100股/手)
+                #                  = amount × 10 / volume
+                # 注意：kline_day 列名为 volume（不是 vol），data_cleaner 入库时已重命名
                 # 用于浮盈持续时间计算；找不到昨日数据则传 0（sei_feature 内部降级为昨收）
                 vwap_prev = 0.0
                 try:
                     idx = all_dates_20d.index(target_date)
                     if idx > 0:
                         prev_row = daily_grouped.get((ts_code, all_dates_20d[idx - 1]), {})
-                        prev_vol = float(prev_row.get("vol",    0) or 0)
+                        prev_vol = float(prev_row.get("volume", 0) or 0)  # ← volume，非 vol
                         prev_amt = float(prev_row.get("amount", 0) or 0)
                         if prev_vol > 0:
                             vwap_prev = prev_amt * 10 / prev_vol   # 千元×1000/(手×100) = 元/股
