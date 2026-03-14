@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime
 from utils.log_utils import logger
-from utils.wechat_push import send_wechat_message
+from utils.wechat_push import send_wechat_message_to_multiple_users
 from agent_stats.stats_engine import AgentStatsEngine
 from agent_stats.config import MAX_RETRY_TIMES, RETRY_INTERVAL
 
@@ -50,7 +50,7 @@ def main():
                 logger.info("脚本执行成功！")
                 # 推送成功通知
                 try:
-                    send_wechat_message(
+                    send_wechat_message_to_multiple_users(
                         "【智能体统计成功】",
                         f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n执行结果：成功完成所有统计任务"
                     )
@@ -65,7 +65,7 @@ def main():
             logger.error(f"脚本执行异常：{e}", exc_info=True)
             # 推送异常告警
             try:
-                send_wechat_message(
+                send_wechat_message_to_multiple_users(
                     "【智能体统计异常告警】",
                     f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n异常信息：{str(e)[:500]}"
                 )
@@ -80,7 +80,7 @@ def main():
     if not run_success:
         logger.error(f"脚本执行失败，已达到最大重试次数{MAX_RETRY_TIMES}")
         try:
-            send_wechat_message(
+            send_wechat_message_to_multiple_users(
                 "【智能体统计最终失败】",
                 f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n已达到最大重试次数{MAX_RETRY_TIMES}，请手动检查！"
             )
