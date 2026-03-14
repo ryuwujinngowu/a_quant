@@ -328,6 +328,45 @@ def get_trade_dates(start_date: str, end_date: str) -> List[str]:
     return trade_dates
 
 
+def get_prev_trade_date(ref_date: str = None) -> str:
+    """
+    返回 ref_date（含）之前最近一个交易日，不含 ref_date 当天。
+    主要用于凌晨定时任务中获取"昨天的交易日"。
+
+    :param ref_date: 参考日期，格式 YYYY-MM-DD，默认为今日
+    :return: 最近一个已完成的交易日，格式 YYYY-MM-DD
+    """
+    from datetime import timedelta
+    today = ref_date or datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
+    try:
+        dates = get_trade_dates(start, today)
+        # 去掉 ref_date 当天（凌晨运行时当天市场还未开盘）
+        dates = [d for d in dates if d < today]
+        return dates[-1] if dates else today
+    except Exception as e:
+        logger.warning(f"[get_prev_trade_date] 查询失败，回退到昨日：{e}")
+        from datetime import timedelta
+        return (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def get_st_stock_codes(trade_date: str) -> List[str]:
+    """
+    获取指定交易日所有 ST / *ST 股票代码列表。
+    与 filter_st_stocks 区别：本函数直接返回 ST 代码集合，无需传入候选池。
+
+    :param trade_date: 交易日，格式 YYYY-MM-DD
+    :return: ST 股票 ts_code 列表
+    """
+    sql = "SELECT DISTINCT ts_code FROM stock_risk_warning WHERE trade_date = %s"
+    try:
+        df = db.query(sql, params=(trade_date,), return_df=True)
+        return df["ts_code"].tolist() if not df.empty else []
+    except Exception as e:
+        logger.error(f"[get_st_stock_codes] 查询失败 | 交易日：{trade_date} | 错误：{e}")
+        return []
+
+
 def get_daily_kline_data(trade_date: str, ts_code_list: List[str] = None) -> pd.DataFrame:
     """
     获取指定日期的日线数据（向后兼容优化版）

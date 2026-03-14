@@ -3,10 +3,14 @@
 阿里云crontab定时触发的唯一文件
 示例crontab配置（每个交易日凌晨3点执行）：
 0 3 * * 1-5 /usr/bin/python3 /home/xxx/AQuant/agent_stats/run.py >> /home/xxx/AQuant/logs/agent_stats_run.log 2>&1
+
+首次运行（补全历史）：
+python agent_stats/run.py --start-date 2022-01-01
 """
 # 先执行模块初始化，处理路径问题，必须放在最前面
 import agent_stats
 
+import argparse
 import sys
 import time
 from datetime import datetime
@@ -17,12 +21,24 @@ from agent_stats.config import MAX_RETRY_TIMES, RETRY_INTERVAL
 
 
 def main():
+    parser = argparse.ArgumentParser(description="智能体收益统计引擎")
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="统计起始日期（格式 YYYY-MM-DD），首次运行时指定以补全历史数据。"
+             "不传则使用 config.py 中的 START_DATE。",
+    )
+    args = parser.parse_args()
+
     logger.info("=" * 50)
     logger.info(f"智能体收益统计脚本启动，运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if args.start_date:
+        logger.info(f"自定义起始日期：{args.start_date}")
     logger.info("=" * 50)
 
-    # 初始化引擎
-    engine = AgentStatsEngine()
+    # 初始化引擎（将 --start-date 传入覆盖 config.START_DATE）
+    engine = AgentStatsEngine(start_date=args.start_date)
     retry_count = 0
     run_success = False
 

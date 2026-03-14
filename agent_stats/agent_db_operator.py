@@ -104,8 +104,9 @@ class AgentStatsDBOperator:
             return False
 
     def check_date_data_exists(self, trade_date: str) -> bool:
-        """检查指定交易日的日线数据是否已入库（前置校验用）"""
-        # 复用现有项目的日线表检查逻辑，替换为你的日线表名
+        """检查指定交易日的日线数据是否已入库（前置校验用）
+        kline_day.trade_date 存储格式为 YYYYMMDD，需做格式转换"""
+        date_fmt = trade_date.replace("-", "")
         sql = "SELECT COUNT(1) as cnt FROM kline_day WHERE trade_date = %s LIMIT 1"
-        result = db.query_one(sql, (trade_date,))
+        result = db.query_one(sql, (date_fmt,))
         return result and result["cnt"] > 0

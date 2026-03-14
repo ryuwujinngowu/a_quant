@@ -37,7 +37,7 @@ from typing import Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.common_tools import get_trade_dates, get_daily_kline_data
+from utils.common_tools import get_trade_dates, get_daily_kline_data, get_prev_trade_date
 from utils.log_utils import logger
 # 修正：保持导入名称正确，后续调用统一使用这个名称
 from utils.wechat_push import send_wechat_message_to_multiple_users
@@ -183,8 +183,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--date",
         type=str,
-        default=datetime.now().strftime("%Y-%m-%d"),
-        help="交易日期，格式 YYYY-MM-DD（默认今日）",
+        default=get_prev_trade_date(),
+        help="交易日期，格式 YYYY-MM-DD（默认：最近一个已完成交易日，即凌晨运行时的前一交易日）",
     )
     parser.add_argument(
         "--dry-run",
