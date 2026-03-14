@@ -27,21 +27,33 @@ class SectorHeatXGBModel:
         self.model = None
         # scale_pos_weight 在 train() 中根据实际数据动态计算
         self.base_params = {
-            "objective":           "binary:logistic",
-            "eval_metric":         "auc",
-            "max_depth":           4,
-            "learning_rate":       0.05,
-            "n_estimators":        500,        # 配合 early_stopping 使用
-            "early_stopping_rounds": 50,        # 【核心修复】移到这里，兼容新版本XGBoost
-            "subsample":           0.8,        # 行采样，防过拟合
-            "colsample_bytree":    0.8,        # 列采样，防过拟合
-            "min_child_weight":    5,          # 叶节点最小样本数
-            "gamma":               0.1,        # 分裂最小增益
-            "reg_alpha":           0.1,        # L1 正则
-            "reg_lambda":          1.0,        # L2 正则
-            "n_jobs":              -1,         # 全核心并行
-            "random_state":        42,
-            "verbosity":           0,
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+            # 1. 树深度：从4→3，特征少无需深树，避免过拟合
+            "max_depth": 3,
+            # 2. 学习率：从0.08→0.2，特征精简后需更高学习率加速收敛，解决6轮早停问题
+            "learning_rate": 0.2,
+            # 3. 最大轮数：保持800，配合早停足够用
+            "n_estimators": 500,
+            # 4. 早停轮数：从100→20，特征少收敛快，20轮足够，既不欠拟合也不过拟合
+            "early_stopping_rounds": 20,
+            # 5. 行采样：从0.8→0.8（不变），精简特征后无需过度采样
+            "subsample": 0.8,
+            # 6. 列采样：从0.8→0.9，仅9个核心特征，每次用8-9个，避免丢失有效信息
+            "colsample_bytree": 0.9,
+            # 7. 叶节点最小样本数：从5→3，降低门槛，让模型更容易学到核心规律（避免欠拟合）
+            "min_child_weight": 3,
+            # 8. 分裂最小增益：从0.1→0.05，降低分裂门槛，适配少特征的简单规律
+            "gamma": 0.05,
+            # 9. L1正则：从0.1→0.5，适度增加，聚焦核心因子（过滤残余噪声）
+            "reg_alpha": 0.5,
+            # 10. L2正则：保持1.0（无需调整，足够约束权重）
+            "reg_lambda": 1.0,
+            # 11. 新增：样本权重，从3.67→2.5，降低假阳性，提升精确率（核心修改！）
+            "scale_pos_weight": 2.5,
+            "n_jobs": -1,
+            "random_state": 42,
+            "verbosity": 0,
         }
 
     def train(self, X_train, X_val, y_train, y_val, feature_cols: list):

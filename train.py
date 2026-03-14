@@ -26,6 +26,7 @@ from sklearn.metrics import (
     accuracy_score, roc_auc_score, precision_score, recall_score,
     classification_report, confusion_matrix,
 )
+from typing import List
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
@@ -50,16 +51,67 @@ EXCLUDE_COLS = [
 
 # 因子过滤模式（fnmatch 通配符）：匹配到的列将被排除在训练特征之外
 # 修改此处即可在不重新生成 CSV 的情况下切换因子组合，无需重跑 dataset.py
-EXCLUDE_PATTERNS: list[str] = [
+EXCLUDE_PATTERNS: List[str] = [
     "stock_open_*",
     "stock_high_*",
     "stock_low_*",
     "stock_close_*",
-    # MA 均线原始价格：绝对价格跨股无可比性（1元股 vs 100元股的 MA 值无意义）
-    # bias5/bias10/bias13、ma_align、pos_20d、ma5_slope 已携带均线的归一化信息
+    # 原始均线绝对价格：无跨股可比性，归一化信息已由bias/ma_slope携带
     "ma5",
     "ma10",
-    "ma13",
+    # "ma13",
+
+    # ========== 新增：全NaN无数据的垃圾因子 ==========
+    # 市场宏观类因子：全为NaN，无有效样本，完全无预测力
+    "market_*",
+    # 板块分类ID：ICIR接近0，无任何预测价值
+    "sector_id",
+
+    # ========== 新增：所有d1-d4滞后无效因子 ==========
+    # 所有非当日的滞后因子：仅d0当日因子有效，d1-d4 ICIR全<0.5，预测力严重衰减，冗余噪声
+    "*_d[1-4]",
+
+    # ========== 新增：冗余/刚过线但无增量信息的因子 ==========
+    # 短周期乖离率：与核心因子bias13高度相关，无增量信息
+    "bias5",
+    "bias10",
+    # 短周期价格位置：与核心因子pos_20d高度相关，无增量信息
+    "pos_5d",
+    "index_*",
+    # ========== 新增：大样本下完全无效的因子 ==========
+    # 板块均值类因子：ICIR全<0.2，无稳定预测力
+    # 'sector_avg_profit_*',
+    # 'sector_avg_loss_*',
+    # 'stock_sector_20d_rank',
+    # 'stock_vol_ratio_*'
+    # 'stock_amount_5d_ratio_*'
+    # 'ma_align',
+    'pos_5d',
+    # 'from_high_20d',
+    # 'stock_vwap_dev_*',
+    # 涨跌幅原始值：ICIR<0.2，无预测力
+    "stock_pct_chg_*",
+    # HDI持股难度因子：大样本下ICIR<0.2，无稳定预测力
+    "stock_hdi_*",
+    # 盈利/亏损情绪分：仅d1刚过线，其余全无效，且与max_dd/vwap_dev高度相关
+    "stock_profit_*",
+    # "stock_loss_*",
+    # 涨跌停行为因子：大样本下ICIR<0.3，无稳定预测力
+    "stock_seal_times_*",
+    "stock_break_times_*",
+    # "stock_lift_times_*",
+    # 趋势拟合因子：ICIR<0.2，无预测力
+    "stock_trend_r2_*",
+    # K线辅助因子：ICIR<0.3，无稳定预测力
+    "stock_cpr_*",
+    "stock_candle_*",
+    # "stock_gap_return_*",
+    # "stock_lower_shadow_*",
+    # 时间持续类因子：ICIR<0.4，无稳定预测力
+    "stock_red_time_ratio_*",
+    "stock_float_profit_time_ratio_*",
+    "stock_red_session_pm_ratio_*",
+    "stock_float_session_pm_ratio_*",
 ]
 
 

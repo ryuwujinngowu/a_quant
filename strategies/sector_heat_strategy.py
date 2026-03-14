@@ -163,6 +163,9 @@ class SectorHeatStrategy(BaseStrategy):
             return {}
 
         logger.info(f"{trade_date} Top3={top3_sectors} | adapt_score={adapt_score}")
+        if adapt_score >=50:
+            logger.warning(f"{adapt_score} 轮动过快")
+            return {}
 
         # ── ST 数据入库（非致命，异常不中断选股）────────────────────────────
         try:
