@@ -1,10 +1,12 @@
 """
-数据库操作封装
-和核心引擎解耦，所有表读写统一收口，后续改表结构仅需修改这里
+DB 操作封装
+===========
+所有 agent_daily_profit_stats 表的读写收口于此，引擎不直接执行 SQL。
+字段约定：
+  reserve_str_1 — 错误信息占位（非空说明该记录计算时出现异常）
 """
 import json
-from typing import List, Dict
-from datetime import datetime
+from typing import Dict, List, Optional, Set
 from utils.db_utils import db
 from utils.log_utils import logger
 from agent_stats.config import STATS_TABLE_NAME
@@ -12,80 +14,176 @@ from agent_stats.config import STATS_TABLE_NAME
 
 class AgentStatsDBOperator:
     def __init__(self):
-        self.table_name = STATS_TABLE_NAME
+        self.t = STATS_TABLE_NAME
 
-    def get_last_processed_date(self, agent_id: str) -> str:
-        """获取指定智能体最后一次处理的选股日期"""
-        sql = f"""
-            SELECT MAX(trade_date) as max_date FROM {self.table_name} 
-            WHERE agent_id = %s
+    # ------------------------------------------------------------------ #
+    # 查询方法
+    # ------------------------------------------------------------------ #
+
+    def get_all_agents_last_dates(self) -> Dict[str, str]:
         """
-        result = db.query_one(sql, (agent_id,))
-        if result and result["max_date"]:
-            return result["max_date"].strftime("%Y-%m-%d")
-        return None
+        一次查询返回所有 agent 在 DB 中最后一条记录的日期。
+        {agent_id: "YYYY-MM-DD"} 或 {} (无记录时对应 agent_id 不在字典里)
+        """
+        sql = f"SELECT agent_id, MAX(trade_date) AS max_date FROM {self.t} GROUP BY agent_id"
+        try:
+            rows = db.query_all(sql)
+            return {
+                r["agent_id"]: r["max_date"].strftime("%Y-%m-%d")
+                for r in rows if r["max_date"]
+            }
+        except Exception as e:
+            logger.error(f"get_all_agents_last_dates 失败：{e}")
+            return {}
+
+    def get_agents_closed_dates(self) -> Dict[str, Set[str]]:
+        """
+        返回各 agent 中已完成 D+1 结账的日期集合（next_day_avg_close_return IS NOT NULL）。
+        {agent_id: {"2024-10-01", "2024-10-02", ...}}
+        """
+        sql = f"""
+            SELECT agent_id, trade_date
+            FROM {self.t}
+            WHERE next_day_avg_close_return IS NOT NULL
+        """
+        try:
+            rows = db.query_all(sql)
+            result: Dict[str, Set[str]] = {}
+            for r in rows:
+                aid  = r["agent_id"]
+                date = r["trade_date"].strftime("%Y-%m-%d")
+                result.setdefault(aid, set()).add(date)
+            return result
+        except Exception as e:
+            logger.error(f"get_agents_closed_dates 失败：{e}")
+            return {}
+
+    def get_agent_recorded_dates(self, agent_id: str) -> List[str]:
+        """返回某 agent 所有已入库的交易日列表（升序）"""
+        sql = f"SELECT trade_date FROM {self.t} WHERE agent_id = %s ORDER BY trade_date ASC"
+        try:
+            rows = db.query_all(sql, (agent_id,))
+            return [r["trade_date"].strftime("%Y-%m-%d") for r in rows]
+        except Exception as e:
+            logger.error(f"[{agent_id}] get_agent_recorded_dates 失败：{e}")
+            return []
+
+    def get_signal_detail(self, agent_id: str, trade_date: str) -> List[Dict]:
+        """读取指定 agent + 日期的 signal_stock_detail（stock_list 字段）"""
+        sql = f"""
+            SELECT signal_stock_detail FROM {self.t}
+            WHERE agent_id = %s AND trade_date = %s
+        """
+        try:
+            row = db.query_one(sql, (agent_id, trade_date))
+            if not row or not row.get("signal_stock_detail"):
+                return []
+            detail = row["signal_stock_detail"]
+            if isinstance(detail, str):
+                detail = json.loads(detail)
+            return detail.get("stock_list", [])
+        except Exception as e:
+            logger.error(f"[{agent_id}][{trade_date}] get_signal_detail 失败：{e}")
+            return []
 
     def get_unclosed_records(self, trade_date: str) -> List[Dict]:
-        """获取指定选股日期的待结账记录（隔日字段为空的记录）"""
+        """查询指定日期待结账记录（仅作外部调用，引擎内部不再使用）"""
         sql = f"""
-            SELECT agent_id, trade_date, signal_stock_detail 
-            FROM {self.table_name} 
+            SELECT agent_id, trade_date, signal_stock_detail
+            FROM {self.t}
             WHERE trade_date = %s AND next_day_avg_close_return IS NULL
         """
-        result = db.query_all(sql, (trade_date,))
-        # 解析JSON字段
-        for row in result:
-            row["signal_stock_detail"] = json.loads(row["signal_stock_detail"])
-        return result
+        try:
+            rows = db.query_all(sql, (trade_date,))
+            for r in rows:
+                if isinstance(r.get("signal_stock_detail"), str):
+                    r["signal_stock_detail"] = json.loads(r["signal_stock_detail"])
+            return rows
+        except Exception as e:
+            logger.error(f"get_unclosed_records 失败：{e}")
+            return []
+
+    def get_last_processed_date(self, agent_id: str) -> Optional[str]:
+        """兼容旧调用（run.py wechat_reporter）"""
+        sql = f"SELECT MAX(trade_date) AS max_date FROM {self.t} WHERE agent_id = %s"
+        try:
+            row = db.query_one(sql, (agent_id,))
+            return row["max_date"].strftime("%Y-%m-%d") if row and row["max_date"] else None
+        except Exception as e:
+            logger.error(f"[{agent_id}] get_last_processed_date 失败：{e}")
+            return None
+
+    def get_latest_stats(self, trade_date: str) -> List[Dict]:
+        """获取指定日期所有 agent 的统计摘要（用于微信推送）"""
+        sql = f"""
+            SELECT agent_id, agent_name, trade_date,
+                   intraday_avg_return,
+                   next_day_avg_open_premium, next_day_avg_close_return,
+                   next_day_avg_max_premium, next_day_avg_max_drawdown,
+                   next_day_avg_red_minute, next_day_avg_profit_minute,
+                   reserve_str_1
+            FROM {self.t}
+            WHERE trade_date = %s
+            ORDER BY intraday_avg_return DESC
+        """
+        try:
+            return db.query_all(sql, (trade_date,)) or []
+        except Exception as e:
+            logger.error(f"get_latest_stats 失败：{e}")
+            return []
+
+    # ------------------------------------------------------------------ #
+    # 写入方法
+    # ------------------------------------------------------------------ #
 
     def insert_signal_record(self, record: Dict) -> bool:
         """
-        幂等插入选股日记录
-        重复运行时，已存在的记录会直接覆盖，保证幂等性
+        幂等插入选股信号记录（ON DUPLICATE KEY UPDATE）。
+        已存在时仅更新 intraday/detail 字段，不覆盖 next_day 字段。
         """
         sql = f"""
-            INSERT INTO {self.table_name} (
-                agent_id, agent_name, trade_date, 
+            INSERT INTO {self.t} (
+                agent_id, agent_name, trade_date,
                 intraday_avg_return, signal_stock_detail,
                 create_time, update_time
             ) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
-                agent_name = VALUES(agent_name),
-                intraday_avg_return = VALUES(intraday_avg_return),
-                signal_stock_detail = VALUES(signal_stock_detail),
-                update_time = NOW()
+                agent_name           = VALUES(agent_name),
+                intraday_avg_return  = VALUES(intraday_avg_return),
+                signal_stock_detail  = VALUES(signal_stock_detail),
+                reserve_str_1        = NULL,
+                update_time          = NOW()
         """
         try:
-            affected_rows = db.execute(sql, (
+            db.execute(sql, (
                 record["agent_id"],
                 record["agent_name"],
                 record["trade_date"],
                 record["intraday_avg_return"],
-                json.dumps(record["signal_stock_detail"], ensure_ascii=False)
+                json.dumps(record["signal_stock_detail"], ensure_ascii=False),
             ))
-            logger.debug(f"[{record['agent_id']}][{record['trade_date']}] 选股记录插入成功，影响行数：{affected_rows}")
             return True
         except Exception as e:
-            logger.error(f"[{record['agent_id']}][{record['trade_date']}] 选股记录插入失败：{e}", exc_info=True)
+            logger.error(f"[{record['agent_id']}][{record['trade_date']}] insert_signal_record 失败：{e}")
             return False
 
     def update_next_day_stats(self, agent_id: str, trade_date: str, stats: Dict) -> bool:
-        """更新选股记录的隔日表现字段（结账操作）"""
+        """更新 D+1 隔日表现字段（结账操作）"""
         sql = f"""
-            UPDATE {self.table_name} SET
-                next_day_avg_open_premium = %s,
-                next_day_avg_close_return = %s,
-                next_day_avg_red_minute = %s,
-                next_day_avg_profit_minute = %s,
-                next_day_avg_intraday_profit = %s,
-                next_day_avg_max_premium = %s,
-                next_day_avg_max_drawdown = %s,
-                next_day_stock_detail = %s,
-                update_time = NOW()
+            UPDATE {self.t} SET
+                next_day_avg_open_premium   = %s,
+                next_day_avg_close_return   = %s,
+                next_day_avg_red_minute     = %s,
+                next_day_avg_profit_minute  = %s,
+                next_day_avg_intraday_profit= %s,
+                next_day_avg_max_premium    = %s,
+                next_day_avg_max_drawdown   = %s,
+                next_day_stock_detail       = %s,
+                update_time                 = NOW()
             WHERE agent_id = %s AND trade_date = %s
         """
         try:
-            affected_rows = db.execute(sql, (
+            db.execute(sql, (
                 stats["next_day_avg_open_premium"],
                 stats["next_day_avg_close_return"],
                 stats["next_day_avg_red_minute"],
@@ -94,19 +192,75 @@ class AgentStatsDBOperator:
                 stats["next_day_avg_max_premium"],
                 stats["next_day_avg_max_drawdown"],
                 json.dumps(stats["next_day_stock_detail"], ensure_ascii=False),
-                agent_id,
-                trade_date
+                agent_id, trade_date,
             ))
-            logger.debug(f"[{agent_id}][{trade_date}] 隔日表现更新成功，影响行数：{affected_rows}")
             return True
         except Exception as e:
-            logger.error(f"[{agent_id}][{trade_date}] 隔日表现更新失败：{e}", exc_info=True)
+            logger.error(f"[{agent_id}][{trade_date}] update_next_day_stats 失败：{e}")
             return False
 
+    def insert_error_record(
+        self, agent_id: str, agent_name: str, trade_date: str, error_msg: str
+    ) -> None:
+        """
+        当 agent 某日运算失败时，插入一条 error 占位记录。
+        reserve_str_1 存储错误摘要，后续可根据此字段排查问题。
+        幂等：若当日已有正常记录，仅更新 reserve_str_1 不覆盖数据。
+        """
+        err = f"[ERR]{error_msg[:230]}"   # 列宽 256
+        sql = f"""
+            INSERT INTO {self.t} (
+                agent_id, agent_name, trade_date,
+                intraday_avg_return, signal_stock_detail,
+                reserve_str_1, create_time, update_time
+            ) VALUES (%s, %s, %s, 0, %s, %s, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+                reserve_str_1 = VALUES(reserve_str_1),
+                update_time   = NOW()
+        """
+        try:
+            db.execute(sql, (
+                agent_id, agent_name, trade_date,
+                json.dumps({"stock_list": []}, ensure_ascii=False),
+                err,
+            ))
+        except Exception as e:
+            logger.error(f"[{agent_id}][{trade_date}] insert_error_record 失败：{e}")
+
+    def mark_error(self, agent_id: str, trade_date: str, error_msg: str) -> None:
+        """标记已有记录出现错误（仅更新 reserve_str_1，不影响其他字段）"""
+        sql = f"""
+            UPDATE {self.t} SET
+                reserve_str_1 = %s,
+                update_time   = NOW()
+            WHERE agent_id = %s AND trade_date = %s
+        """
+        try:
+            db.execute(sql, (f"[ERR]{error_msg[:230]}", agent_id, trade_date))
+        except Exception as e:
+            logger.error(f"[{agent_id}][{trade_date}] mark_error 失败：{e}")
+
+    def delete_records_from(self, agent_id: str, from_date: str) -> int:
+        """
+        删除 agent 从 from_date 起（含）的所有记录。
+        仅由手动重置流程（--reset-agent）调用，不自动触发。
+        """
+        sql = f"DELETE FROM {self.t} WHERE agent_id = %s AND trade_date >= %s"
+        try:
+            affected = db.execute(sql, (agent_id, from_date))
+            logger.info(f"[{agent_id}] 重置：删除 {from_date} 起 {affected} 条记录")
+            return affected
+        except Exception as e:
+            logger.error(f"[{agent_id}] delete_records_from 失败：{e}")
+            return 0
+
     def check_date_data_exists(self, trade_date: str) -> bool:
-        """检查指定交易日的日线数据是否已入库（前置校验用）
-        kline_day.trade_date 存储格式为 YYYYMMDD，需做格式转换"""
+        """检查日线数据是否已入库（kline_day.trade_date 为 YYYYMMDD 格式）"""
         date_fmt = trade_date.replace("-", "")
-        sql = "SELECT COUNT(1) as cnt FROM kline_day WHERE trade_date = %s LIMIT 1"
-        result = db.query_one(sql, (date_fmt,))
-        return result and result["cnt"] > 0
+        sql = "SELECT COUNT(1) AS cnt FROM kline_day WHERE trade_date = %s LIMIT 1"
+        try:
+            row = db.query_one(sql, (date_fmt,))
+            return bool(row and row["cnt"] > 0)
+        except Exception as e:
+            logger.error(f"check_date_data_exists 失败：{e}")
+            return False
