@@ -979,6 +979,40 @@ def get_sector_stock_daily_data(sector_name: str, trade_date: str) -> pd.DataFra
         )
         return pd.DataFrame()
 
+def get_kline_day_range(
+    ts_code_list: List[str],
+    date_start: str,
+    date_end: str,
+) -> pd.DataFrame:
+    """
+    批量查询多只股票在指定日期范围内的日线数据。
+    date_start / date_end 支持 YYYY-MM-DD 或 YYYYMMDD 两种格式，内部统一转 YYYYMMDD。
+
+    :param ts_code_list: 股票代码列表
+    :param date_start:   起始日期（含）
+    :param date_end:     结束日期（含）
+    :return: DataFrame，含 ts_code / trade_date / open / high / low / close / pre_close 等列
+    """
+    if not ts_code_list:
+        return pd.DataFrame()
+    start_fmt = date_start.replace("-", "")
+    end_fmt   = date_end.replace("-", "")
+    try:
+        sql = """
+            SELECT ts_code, trade_date, open, high, low, close, pre_close, vol, amount
+            FROM kline_day
+            WHERE ts_code IN %s
+              AND trade_date >= %s
+              AND trade_date <= %s
+            ORDER BY ts_code, trade_date
+        """
+        df = db.query(sql, params=(tuple(ts_code_list), start_fmt, end_fmt), return_df=True)
+        return df if df is not None else pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[get_kline_day_range] 查询失败 | {date_start}~{date_end} | {e}")
+        return pd.DataFrame()
+
+
 if __name__ == "__main__":
     # result = select_top3_hot_sectors(trade_date="2024-02-20")
     # print(result)

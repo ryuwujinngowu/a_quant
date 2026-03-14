@@ -140,17 +140,19 @@ class AgentStatsDBOperator:
         """
         幂等插入选股信号记录（ON DUPLICATE KEY UPDATE）。
         已存在时仅更新 intraday/detail 字段，不覆盖 next_day 字段。
+        reserve_str_2 存储策略描述（agent_desc），每次写入覆盖以保持最新。
         """
         sql = f"""
             INSERT INTO {self.t} (
                 agent_id, agent_name, trade_date,
                 intraday_avg_return, signal_stock_detail,
-                create_time, update_time
-            ) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                reserve_str_2, create_time, update_time
+            ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
                 agent_name           = VALUES(agent_name),
                 intraday_avg_return  = VALUES(intraday_avg_return),
                 signal_stock_detail  = VALUES(signal_stock_detail),
+                reserve_str_2        = VALUES(reserve_str_2),
                 reserve_str_1        = NULL,
                 update_time          = NOW()
         """
@@ -161,6 +163,7 @@ class AgentStatsDBOperator:
                 record["trade_date"],
                 record["intraday_avg_return"],
                 json.dumps(record["signal_stock_detail"], ensure_ascii=False),
+                record.get("agent_desc", ""),
             ))
             return True
         except Exception as e:

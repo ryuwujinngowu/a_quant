@@ -9,8 +9,9 @@ import pandas as pd
 
 class BaseAgent:
     # 必须由子类实现的属性
-    agent_id: str = ""  # 智能体唯一标识，和数据库agent_id对应
+    agent_id: str = ""    # 智能体唯一标识，和数据库agent_id对应
     agent_name: str = ""  # 智能体中文名称
+    agent_desc: str = ""  # 策略详细说明（存入 DB reserve_str_2）
 
     def get_signal_stock_pool(self, trade_date: str, daily_data: pd.DataFrame, context: Dict) -> List[Dict]:
         """
