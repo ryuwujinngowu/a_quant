@@ -301,6 +301,7 @@ class AgentStatsEngine:
                 self.db_operator.insert_signal_record({
                     "agent_id":            agent.agent_id,
                     "agent_name":          agent.agent_name,
+                    "agent_desc":          agent.agent_desc,
                     "trade_date":          trade_date,
                     "intraday_avg_return": avg_ret,
                     "signal_stock_detail": {"stock_list": stock_detail},
