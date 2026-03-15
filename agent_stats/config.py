@@ -8,12 +8,6 @@ from datetime import datetime
 # 统计起始日期（第一次运行时从该日期开始补全历史数据）
 START_DATE = "2026-01-01"
 
-# 智能体注册列表
-AGENT_REGISTRY = [
-    "agent_stats.agents.ma5_low_buy.MA5LowBuyAgent",
-    "agent_stats.agents.board_2nd.SecondBoardAgent",
-]
-
 # ==================== 数据库配置 ====================
 # 统计表名（和建表SQL完全一致）
 STATS_TABLE_NAME = "agent_daily_profit_stats"
