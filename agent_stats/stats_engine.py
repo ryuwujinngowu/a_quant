@@ -150,14 +150,16 @@ class AgentStatsEngine:
             bp = buy_price_map.get(row["ts_code"], 0)
             if bp <= 0:
                 continue
-            ret = (row["close"] - bp) / bp * 100
+            # 【修复】将 Decimal 类型转换为 float
+            close_p = float(row["close"])
+            ret = (close_p - bp) / bp * 100
             returns.append(ret)
             detail.append({
-                "ts_code":              row["ts_code"],
-                "stock_name":           name_map.get(row["ts_code"], ""),
-                "buy_price":            bp,
-                "intraday_close_price": row["close"],
-                "intraday_return":      round(ret, 4),
+                "ts_code": row["ts_code"],
+                "stock_name": name_map.get(row["ts_code"], ""),
+                "buy_price": bp,
+                "intraday_close_price": close_p,  # 使用转换后的值
+                "intraday_return": round(ret, 4),
             })
         return round(float(np.mean(returns)) if returns else 0.0, 4), detail
 
@@ -215,45 +217,56 @@ class AgentStatsEngine:
             tc   = t_close_map.get(ts, 0)
             if bp <= 0:
                 continue
+            # 【修复】将 Decimal 类型统一转换为 float，避免类型不匹配
+            open_p = float(row["open"])
+            close_p = float(row["close"])
+            high_p = float(row["high"])
+            low_p = float(row["low"])
+            amount = float(row["amount"])
+            volume = float(row["volume"]) if row["volume"] > 0 else 0.0
 
-            open_ret  = (row["open"]  - bp) / bp * 100
-            close_ret = (row["close"] - bp) / bp * 100
-            max_prem  = (row["high"]  - bp) / bp * 100
-            max_dd    = (bp - row["low"])   / bp * 100
-            avg_price = row["amount"] / row["volume"] if row["volume"] > 0 else row["close"]
-            avg_prof  = (avg_price - bp) / bp * 100
+            open_ret = (open_p - bp) / bp * 100
+            close_ret = (close_p - bp) / bp * 100
+            max_prem = (high_p - bp) / bp * 100
+            max_dd = (bp - low_p) / bp * 100
+            avg_price = amount / volume if volume > 0 else close_p
+            avg_prof = (avg_price - bp) / bp * 100
 
             open_dir = (
-                "high_open" if row["open"] > tc
-                else ("low_open" if row["open"] < tc else "flat_open")
+                "high_open" if open_p > tc
+                else ("low_open" if open_p < tc else "flat_open")
             )
 
+            # ...（后续代码保持不变，使用转换后的 open_p/close_p 等变量）...
             min_df = minute_map.get(ts, pd.DataFrame())
             red_min, profit_min = 0, 0
             if not min_df.empty:
-                red_min    = int((min_df["close"] >= tc).sum())
+                red_min = int((min_df["close"] >= tc).sum())
                 profit_min = int((min_df["close"] >= bp).sum())
 
-            open_ret_list.append(open_ret);   close_ret_list.append(close_ret)
-            max_prem_list.append(max_prem);   max_dd_list.append(max_dd)
-            red_min_list.append(red_min);     profit_min_list.append(profit_min)
+            open_ret_list.append(open_ret);
+            close_ret_list.append(close_ret)
+            max_prem_list.append(max_prem);
+            max_dd_list.append(max_dd)
+            red_min_list.append(red_min);
+            profit_min_list.append(profit_min)
             avg_prof_list.append(avg_prof)
 
             detail.append({
-                "ts_code":              ts,
-                "stock_name":           name_map.get(ts, ""),
-                "buy_price":            bp,
-                "next_open_price":      row["open"],
-                "next_close_price":     row["close"],
-                "next_day_avg_price":   round(avg_price, 4),
-                "open_return":          round(open_ret,  4),
-                "close_return":         round(close_ret, 4),
-                "intraday_avg_profit":  round(avg_prof,  4),
-                "intraday_max_return":  round(max_prem,  4),
-                "intraday_max_drawdown":round(max_dd,    4),
-                "red_minute_total":     red_min,
-                "profit_minute_total":  profit_min,
-                "open_direction":       open_dir,
+                "ts_code": ts,
+                "stock_name": name_map.get(ts, ""),
+                "buy_price": bp,
+                "next_open_price": open_p,
+                "next_close_price": close_p,
+                "next_day_avg_price": round(avg_price, 4),
+                "open_return": round(open_ret, 4),
+                "close_return": round(close_ret, 4),
+                "intraday_avg_profit": round(avg_prof, 4),
+                "intraday_max_return": round(max_prem, 4),
+                "intraday_max_drawdown": round(max_dd, 4),
+                "red_minute_total": red_min,
+                "profit_minute_total": profit_min,
+                "open_direction": open_dir,
             })
 
         def sm(arr):
