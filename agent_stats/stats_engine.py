@@ -46,7 +46,7 @@ from agent_stats.config import START_DATE, MAX_RETRY_TIMES
 from agent_stats.agent_base import BaseAgent
 from agent_stats.agent_db_operator import AgentStatsDBOperator
 from utils.log_utils import logger
-from utils.common_tools import get_trade_dates, get_daily_kline_data, get_st_stock_codes
+from utils.common_tools import get_trade_dates, get_daily_kline_data, get_st_stock_codes, get_prev_trade_date
 from data.data_cleaner import data_cleaner
 
 
@@ -55,12 +55,27 @@ class AgentStatsEngine:
         self.start_date = start_date or START_DATE
         self.db_operator = AgentStatsDBOperator()
         self.agents: List[BaseAgent] = self._auto_load_agents()
-        # 加载从 start_date 到今日的所有交易日（升序）
-        today = datetime.now().strftime("%Y-%m-%d")
-        self.all_trade_dates: List[str] = get_trade_dates(self.start_date, today)
+
+        # ── 处理日期范围 ──────────────────────────────────────────────────
+        # 触发时间为交易日 T 的凌晨 3 点，此时 T-1 日线已入库，T 日尚未开盘。
+        # 因此只处理到 T-1（即上一个完整交易日），避免因 T 日数据未入库导致
+        # 写入空信号 error 记录、后续无法补跑。
+        last_trade_date = get_prev_trade_date()      # 上一个完整交易日
+
+        # all_trade_dates：信号生成的处理窗口（从 START_DATE 到上一交易日）
+        self.all_trade_dates: List[str] = get_trade_dates(self.start_date, last_trade_date)
+
+        # context_trade_dates：含历史回看窗口，供 agent 计算 MA / 5日涨幅等。
+        # 向前延伸 90 个自然日（≈60 个交易日），覆盖 30日均线等长周期需求。
+        context_start = (
+            datetime.strptime(self.start_date, "%Y-%m-%d") - timedelta(days=90)
+        ).strftime("%Y-%m-%d")
+        self.context_trade_dates: List[str] = get_trade_dates(context_start, last_trade_date)
+
         logger.info(
             f"引擎初始化完成 | 智能体：{len(self.agents)} 个 | "
-            f"交易日范围：{self.start_date} ~ {self.all_trade_dates[-1] if self.all_trade_dates else '无'}"
+            f"处理范围：{self.start_date} ~ {last_trade_date} | "
+            f"上下文范围：{context_start} ~ {last_trade_date}"
         )
 
     # ------------------------------------------------------------------ #
@@ -111,14 +126,21 @@ class AgentStatsEngine:
         return None
 
     def _get_trade_date_context(self, trade_date: str) -> Dict:
-        """构建当日选股上下文（ST 列表 / 历史交易日 / T-1 收盘）"""
+        """
+        构建当日选股上下文（ST 列表 / 历史交易日 / T-1 收盘）。
+
+        trade_dates 使用 context_trade_dates（含 START_DATE 前 90 天历史），
+        供 agent 计算 MA / 5日涨幅 / 首板检查等需要回看历史的逻辑。
+        pre_close_data 用 context_trade_dates 中 trade_date 的前一日定位，
+        同样可覆盖 START_DATE 前的前收价。
+        """
         context = {
             "st_stock_list": get_st_stock_codes(trade_date),
-            "trade_dates":   self.all_trade_dates,
+            "trade_dates":   self.context_trade_dates,
         }
         try:
-            idx = self.all_trade_dates.index(trade_date)
-            pre_date = self.all_trade_dates[idx - 1] if idx > 0 else None
+            idx = self.context_trade_dates.index(trade_date)
+            pre_date = self.context_trade_dates[idx - 1] if idx > 0 else None
             context["pre_close_data"] = get_daily_kline_data(pre_date) if pre_date else pd.DataFrame()
         except Exception as e:
             logger.warning(f"[{trade_date}] pre_close_data 获取失败：{e}")
