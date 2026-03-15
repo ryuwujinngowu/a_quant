@@ -139,8 +139,12 @@ class MorningLimitUpAgent(BaseAgent):
             return []
 
         # ── Step 3: 并发拉取分钟线 ───────────────────────────────────────
+        # max_workers=10 时各线程各自 sleep 1s 后同时唤醒，会瞬间并发 10 个 API 请求。
+        # data_cleaner 内置全局信号量（_TUSHARE_MIN_API_SEM）已限制并发数，
+        # 此处保持 10 以充分利用 DB 缓存命中的并发（缓存命中不占 API 配额）。
         ts_codes = [c["ts_code"] for c in candidates]
         min_data: Dict[str, pd.DataFrame] = {}
+        fetch_failed: List[str] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(_get_min_df, ts, trade_date): ts for ts in ts_codes}
             for future in concurrent.futures.as_completed(futures):
@@ -150,6 +154,12 @@ class MorningLimitUpAgent(BaseAgent):
                 except Exception as e:
                     logger.warning(f"[{self.agent_id}][{trade_date}][{ts}] 分钟线拉取失败：{e}")
                     min_data[ts] = pd.DataFrame()
+                    fetch_failed.append(ts)
+        if fetch_failed:
+            logger.warning(
+                f"[{self.agent_id}][{trade_date}] ⚠ 分钟线拉取失败 {len(fetch_failed)}/{len(ts_codes)} 只"
+                f"，这些候选将被跳过（影响信号池完整性）：{fetch_failed[:5]}{'...' if len(fetch_failed) > 5 else ''}"
+            )
 
         # ── Step 4: 逐个判断触板时间，筛选早盘命中 ──────────────────────
         result = {}

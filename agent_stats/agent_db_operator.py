@@ -265,6 +265,34 @@ class AgentStatsDBOperator:
             logger.error(f"[{agent_id}] delete_records_from 失败：{e}")
             return 0
 
+    def get_empty_pool_unsettled_records(self) -> List[Dict]:
+        """
+        查找所有"信号池为空但 D+1 字段尚未显式结账"的记录。
+        条件：signal_stock_detail 含 {"stock_list": []}，且 next_day_avg_close_return IS NULL，
+              且 reserve_str_1 为空（非错误记录）。
+        用于 --repair-zeros 修复历史上因旧逻辑导致的漏结账空池记录。
+        """
+        sql = f"""
+            SELECT agent_id, trade_date
+            FROM {self.t}
+            WHERE next_day_avg_close_return IS NULL
+              AND (reserve_str_1 IS NULL OR reserve_str_1 NOT LIKE '[ERR]%')
+              AND signal_stock_detail LIKE '%"stock_list": []%'
+            ORDER BY agent_id, trade_date
+        """
+        try:
+            rows = db.query(sql) or []
+            return [
+                {
+                    "agent_id":   r["agent_id"],
+                    "trade_date": r["trade_date"].strftime("%Y-%m-%d"),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"get_empty_pool_unsettled_records 失败：{e}")
+            return []
+
     def check_date_data_exists(self, trade_date: str) -> bool:
         """检查日线数据是否已入库（kline_day.trade_date 为 YYYYMMDD 格式）"""
         date_fmt = trade_date.replace("-", "")

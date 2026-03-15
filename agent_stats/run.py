@@ -50,6 +50,11 @@ def _parse_args():
         "--reset-from", type=str, default=None,
         help="配合 --reset-agent，指定重跑起始日期（YYYY-MM-DD）。不传则用 --start-date 或 config.START_DATE。",
     )
+    parser.add_argument(
+        "--repair-zeros", action="store_true", default=False,
+        help="修复历史遗留的空信号池未结账记录（D+1 字段 NULL）。"
+             "将这些记录显式写为全零并标记结账，之后正常运行引擎。",
+    )
     return parser.parse_args()
 
 
@@ -74,10 +79,17 @@ def main():
     if args.reset_agent:
         logger.info(f"  --reset-agent : {args.reset_agent}")
         logger.info(f"  --reset-from  : {args.reset_from or '(使用 start_date)'}")
+    if args.repair_zeros:
+        logger.info(f"  --repair-zeros: 开启，将修复空池未结账记录后继续正常运行")
     logger.info("=" * 60)
 
     reset_agents = _build_reset_agents(args)
     engine   = AgentStatsEngine(start_date=args.start_date)
+
+    # 修复历史空池未结账记录（在正常运行前执行）
+    if args.repair_zeros:
+        fixed = engine.repair_zero_records()
+        logger.info(f"[repair-zeros] 完成，修复 {fixed} 条记录，继续正常运行引擎...")
     reporter = AgentWechatReporter()
 
     run_success = False

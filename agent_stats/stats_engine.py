@@ -189,6 +189,26 @@ class AgentStatsEngine:
     # 隔日统计（T+1）
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _zero_next_day_stats() -> Dict:
+        """
+        返回一个全零的 D+1 统计字典，用于：
+          1. 当日信号池为空（无命中股票）时，显式将 D+1 字段写为 0，
+             标记该记录为"正常结账（空池）"，避免与 DB 默认值混淆。
+          2. 与 `get_agents_closed_dates`（IS NOT NULL 判断）配合，
+             确保空池记录不被引擎重复处理。
+        """
+        return {
+            "next_day_avg_open_premium":    0.0,
+            "next_day_avg_close_return":    0.0,
+            "next_day_avg_red_minute":      0,
+            "next_day_avg_profit_minute":   0,
+            "next_day_avg_intraday_profit": 0.0,
+            "next_day_avg_max_premium":     0.0,
+            "next_day_avg_max_drawdown":    0.0,
+            "next_day_stock_detail":        {"stock_list": []},
+        }
+
     def _calc_next_day_stats(
         self,
         stock_list:     List[Dict],
@@ -198,10 +218,11 @@ class AgentStatsEngine:
         """
         计算 T+1 日隔日表现。
         注意：调用前必须确认 next_trade_date 已经是过去的完整交易日，
-              否则日线/分钟线数据不存在，会返回 ({}, [])。
+              否则日线/分钟线数据不存在，会返回 (None, [])。
+        空信号池直接返回 (None, [])，由调用方（_process_one）写显式零值。
         """
         if not stock_list:
-            return {}, []
+            return None, []
 
         ts_code_list  = [s["ts_code"]          for s in stock_list]
         buy_price_map = {s["ts_code"]: s["buy_price"]          for s in stock_list}
@@ -364,7 +385,17 @@ class AgentStatsEngine:
         if next_date and next_date <= today:
             try:
                 stats, _ = self._calc_next_day_stats(stock_detail, trade_date, next_date)
-                if stats:
+                if stats is None:
+                    # 信号池为空（无命中股票），显式写零值 D+1，标记为"正常结账（空池）"。
+                    # 避免依赖 DB 默认值：IS NOT NULL 检查需要字段为显式写入的值，
+                    # 否则 get_agents_closed_dates 无法正确识别"已结账但空池"的记录。
+                    self.db_operator.update_next_day_stats(
+                        agent.agent_id, trade_date, self._zero_next_day_stats()
+                    )
+                    logger.info(
+                        f"[{agent.agent_id}][{trade_date}] 信号池为空，D+1 写零值结账"
+                    )
+                else:
                     self.db_operator.update_next_day_stats(agent.agent_id, trade_date, stats)
                     logger.info(
                         f"[{agent.agent_id}][{trade_date}→{next_date}] "
@@ -381,6 +412,46 @@ class AgentStatsEngine:
     # ------------------------------------------------------------------ #
     # 主流程
     # ------------------------------------------------------------------ #
+
+    def repair_zero_records(self) -> int:
+        """
+        修复历史遗留的"空信号池未结账"记录（--repair-zeros 模式入口）。
+
+        这类记录的成因：旧版引擎在信号池为空时不调用 update_next_day_stats，
+        导致 next_day_avg_close_return 保持 NULL（或 DB 默认 0.0），
+        get_agents_closed_dates 无法正确识别，引擎每次运行都试图重算（或永远忽略）。
+
+        修复策略：将这些记录的 D+1 字段显式写为全零，标记为"正常结账（空池）"。
+        注意：此操作不改变信号数据，只写 D+1 字段。
+
+        返回：成功修复的记录数
+        """
+        records = self.db_operator.get_empty_pool_unsettled_records()
+        if not records:
+            logger.info("[repair-zeros] 无需修复，未发现空池未结账记录")
+            return 0
+
+        logger.info(f"[repair-zeros] 发现 {len(records)} 条空池未结账记录，开始修复...")
+        zero_stats = self._zero_next_day_stats()
+        fixed = 0
+        for rec in records:
+            aid  = rec["agent_id"]
+            date = rec["trade_date"]
+            # 仅当 T+1 已是历史日期才写（否则 T+1 尚未发生，不应结账）
+            next_date = self._get_next_trade_date(date)
+            today = self.all_trade_dates[-1] if self.all_trade_dates else ""
+            if not next_date or next_date > today:
+                logger.debug(f"[repair-zeros][{aid}][{date}] T+1={next_date} 尚未到来，跳过")
+                continue
+            ok = self.db_operator.update_next_day_stats(aid, date, zero_stats)
+            if ok:
+                fixed += 1
+                logger.info(f"[repair-zeros][{aid}][{date}] ✓ 已结账（空池）")
+            else:
+                logger.warning(f"[repair-zeros][{aid}][{date}] 结账写入失败")
+
+        logger.info(f"[repair-zeros] 修复完成：{fixed}/{len(records)} 条")
+        return fixed
 
     def run_full_flow(self, reset_agents: Optional[Dict[str, str]] = None) -> bool:
         """

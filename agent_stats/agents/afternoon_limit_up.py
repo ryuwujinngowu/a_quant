@@ -131,6 +131,7 @@ class AfternoonLimitUpAgent(BaseAgent):
         # ── 并发拉取分钟线 ────────────────────────────────────────────────
         ts_codes = [c["ts_code"] for c in candidates]
         min_data: Dict[str, pd.DataFrame] = {}
+        fetch_failed: List[str] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(_get_min_df, ts, trade_date): ts for ts in ts_codes}
             for future in concurrent.futures.as_completed(futures):
@@ -140,6 +141,12 @@ class AfternoonLimitUpAgent(BaseAgent):
                 except Exception as e:
                     logger.warning(f"[{self.agent_id}][{trade_date}][{ts}] 分钟线拉取失败：{e}")
                     min_data[ts] = pd.DataFrame()
+                    fetch_failed.append(ts)
+        if fetch_failed:
+            logger.warning(
+                f"[{self.agent_id}][{trade_date}] ⚠ 分钟线拉取失败 {len(fetch_failed)}/{len(ts_codes)} 只"
+                f"，这些候选将被跳过（影响信号池完整性）：{fetch_failed[:5]}{'...' if len(fetch_failed) > 5 else ''}"
+            )
 
         # ── 筛选午盘命中 ─────────────────────────────────────────────────
         result = {}

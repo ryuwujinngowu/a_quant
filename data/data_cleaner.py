@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import datetime
+import threading
 import time
 from typing import Optional, List, Union
 import numpy as np
@@ -11,6 +12,11 @@ from utils.common_tools import auto_add_missing_table_columns
 from utils.common_tools import calc_15_years_date_range
 from utils.db_utils import db
 from utils.log_utils import logger
+
+# 全局信号量：限制同时并发调用 Tushare 分钟线接口的线程数。
+# get_kline_min_by_stock_date 先查 DB 缓存（不受限），仅在 DB miss 时进入
+# 此信号量等待，避免历史补全期间大量并发请求超过 Tushare 100次/分钟限制。
+_TUSHARE_MIN_API_SEM = threading.Semaphore(2)
 
 
 class DataCleaner:
@@ -529,13 +535,16 @@ class DataCleaner:
             logger.error(f"[{ts_code}-{trade_date}] 查库失败：{str(e)}")
 
         # 第三步：数据库无数据，调用接口拉取
-        logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，调用接口拉取")
-        raw_df = data_fetcher.fetch_stk_mins(
-            ts_code=ts_code,
-            freq="1min",
-            start_date=f"{trade_date} 09:25:00",
-            end_date=f"{trade_date} 15:00:00"
-        )
+        # 通过全局信号量限制并发 API 请求数（最多同时 2 个线程进入此区间），
+        # 防止历史补全时大量并发超过 Tushare 100次/分钟限制。
+        logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，等待 API 配额后拉取")
+        with _TUSHARE_MIN_API_SEM:
+            raw_df = data_fetcher.fetch_stk_mins(
+                ts_code=ts_code,
+                freq="1min",
+                start_date=f"{trade_date} 09:25:00",
+                end_date=f"{trade_date} 15:00:00"
+            )
         if raw_df.empty:
             logger.warning(f"[{ts_code}-{trade_date}] 接口拉取失败，返回空数据")
             return pd.DataFrame()
