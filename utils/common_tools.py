@@ -999,7 +999,7 @@ def get_kline_day_range(
     end_fmt   = date_end.replace("-", "")
     try:
         sql = """
-            SELECT ts_code, trade_date, open, high, low, close, pre_close, vol, amount
+            SELECT ts_code, trade_date, open, high, low, close, pre_close, volume, amount
             FROM kline_day
             WHERE ts_code IN %s
               AND trade_date >= %s

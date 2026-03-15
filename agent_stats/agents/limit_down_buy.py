@@ -106,6 +106,8 @@ class LimitDownBuyAgent(BaseAgent):
             if limit_down_price <= 0:
                 continue
             low = float(row.get("low", 0.0) if hasattr(row, "get") else 0.0)
+            if low <= 0:
+                continue   # 数据缺失
             if low > limit_down_price * LIMIT_DOWN_TOL:
                 continue   # 当日未触及跌停
             candidates.append({
