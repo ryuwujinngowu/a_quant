@@ -16,8 +16,8 @@ Agent 统计结果微信推送
 """
 from typing import List, Dict, Optional
 from utils.log_utils import logger
-from utils.wechat_push import send_wechat_message
-from agent_stats.agent_db_operator import AgentStatsDBOperator
+from utils.wechat_push import send_wechat_message_to_multiple_users
+from agent_stats.agent_db_operator import AgentStatsDBOperator 
 
 
 class AgentWechatReporter:
@@ -37,7 +37,7 @@ class AgentWechatReporter:
                 return False
 
             title, content = self._format_message(trade_date, stats)
-            result = send_wechat_message(title, content)
+            result = send_wechat_message_to_multiple_users(title, content)
             logger.info(f"[WechatReporter] {trade_date} 推送完成")
             return bool(result)
         except Exception as e:

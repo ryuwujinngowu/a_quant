@@ -32,7 +32,7 @@ from agent_stats.config import MAX_RETRY_TIMES, RETRY_INTERVAL, START_DATE
 from agent_stats.stats_engine import AgentStatsEngine
 from agent_stats.wechat_reporter import AgentWechatReporter
 from utils.log_utils import logger
-from utils.wechat_push import send_wechat_message
+from utils.wechat_push import send_wechat_message_to_multiple_users
 
 
 def _parse_args():
@@ -102,7 +102,7 @@ def main():
             retry_count += 1
             logger.error(f"运行异常：{e}", exc_info=True)
             try:
-                send_wechat_message("【agent_stats 异常】", str(e)[:500])
+                send_wechat_message_to_multiple_users("【agent_stats 异常】", str(e)[:500])
             except Exception:
                 pass
             if retry_count < MAX_RETRY_TIMES:
@@ -111,7 +111,7 @@ def main():
     if not run_success:
         logger.error(f"已达最大重试次数 {MAX_RETRY_TIMES}，任务终止")
         try:
-            send_wechat_message("【agent_stats 最终失败】", "请手动检查日志")
+            send_wechat_message_to_multiple_users("【agent_stats 最终失败】", "请手动检查日志")
         except Exception:
             pass
         sys.exit(1)

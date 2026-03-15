@@ -290,4 +290,4 @@ def update_all_stock_concept_tags(
 
 if __name__ == "__main__":
     #默认update= True，只做增量更新没有标签的股票。
-    update_all_stock_concept_tags(batch_size=20,update= True,ts_code=[])
+    update_all_stock_concept_tags(batch_size=20,update= False, ts_code=['002195.sz'])

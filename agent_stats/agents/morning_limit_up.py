@@ -43,7 +43,7 @@ def _get_min_df(ts_code: str, trade_date: str) -> pd.DataFrame:
     return data_cleaner.get_kline_min_by_stock_date(ts_code, trade_date) or pd.DataFrame()
 
 
-def _get_first_limit_time(min_df: pd.DataFrame, limit_price: float) -> datetime | None:
+def _get_first_limit_time(min_df: pd.DataFrame, limit_price: float) -> Optional[datetime]:
     """返回分钟线中首次 high >= limit_price * TOL 的时间，无则 None"""
     if not pd.api.types.is_datetime64_any_dtype(min_df["trade_time"]):
         min_df = min_df.copy()
@@ -54,7 +54,7 @@ def _get_first_limit_time(min_df: pd.DataFrame, limit_price: float) -> datetime 
     return hit.sort_values("trade_time")["trade_time"].iloc[0]
 
 
-def _check_reopen(min_df: pd.DataFrame, limit_price: float) -> datetime | None:
+def _check_reopen(min_df: pd.DataFrame, limit_price: float) -> Optional[datetime]:
     """
     一字板开板+回封校验：
       - 若全天 min_low >= threshold → 未曾开板 → None
