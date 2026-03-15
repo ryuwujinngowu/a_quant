@@ -37,7 +37,7 @@ from utils.log_utils import logger
 
 class SectorTopHighOpenAgent(BaseAgent):
     agent_id   = "sector_top_high_open"
-    agent_name = "昨日最强板块高开选手"
+    agent_name = "昨日top1板块高开无脑跟选手"
     agent_desc = (
         "昨日最强板块今日高开买入策略：取T-1日连板热度排名第1的板块，"
         "筛选该板块内T日高开（open > pre_close）的非ST/非北交所股票，以开盘价买入。"

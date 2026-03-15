@@ -10,7 +10,7 @@ crontab 示例（每工作日凌晨 3 点）：
   python agent_stats/run.py
 
 # 首次运行 / 指定历史起始日期（新部署时）：
-  python agent_stats/run.py --start-date 2024-10-01
+  nohup python3.8 -u agent_stats/run.py --start-date 2024-11-01 > temp.out 2>&1 &
 
 # 手动重跑指定 agent（策略逻辑更新后重新计算历史）：
   python agent_stats/run.py --reset-agent morning_limit_up,afternoon_limit_up --reset-from 2024-10-01
@@ -20,9 +20,20 @@ crontab 示例（每工作日凌晨 3 点）：
 
 ⚠ --reset-agent 会删除 DB 对应记录并重跑，不可逆，系统不会自动触发此参数。
 """
+import sys
+from pathlib import Path
+
+# 获取当前脚本的绝对路径 (agent_stats/run.py)
+current_file = Path(__file__).resolve()
+# 项目根目录是 agent_stats 的父目录 (a_quant/)
+project_root = current_file.parent.parent
+
+# 将项目根目录加入 sys.path（如果尚未存在）
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+# -------------------------------------------
 # 先执行模块初始化（路径处理），必须放最前
 import agent_stats  # noqa: F401
-
 import argparse
 import sys
 import time
