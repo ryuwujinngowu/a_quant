@@ -23,25 +23,34 @@ from utils.log_utils import logger
 #   throttled — 限流模式（每次 API 调用前额外 sleep 3s，≤20次/分钟）
 #   abort     — 中断模式（拒绝新 API 请求，抛 TushareRateLimitAbort）
 #
+# 失败计数单位（stock_fail_streak）：
+#   以「单只股票的所有重试全部耗尽」为一次计数，而非单次 API 调用失败。
+#   原因：一只股票重试过程中有指数退避等待（1→2→4…→30s），偶发性失败
+#   最终会重试成功，不应累计；只有所有重试全部失败才说明接口持续不可用。
+#   任意一只股票成功（无论第几次重试）→ 清零计数。
+#
 # 状态机迁移：
-#   normal → throttled  : 全局连续失败 ≥ _THROTTLE_NORMAL_STREAK 次
-#   throttled → abort   : 全局连续失败 ≥ _THROTTLE_ABORT_STREAK 次
-#   任意 → normal       : 次日零点自动重置（每日配额刷新）
-#   任意 → normal       : 任意一次成功响应（连续失败计数清零）
+#   normal → throttled  : 连续 _THROTTLE_NORMAL_STOCK_STREAK 只股票永久失败
+#   throttled → abort   : 连续 _THROTTLE_ABORT_STOCK_STREAK  只股票永久失败
+#   任意 → normal       : 次日零点自动重置（每日 API 配额刷新）
+#   任意 → normal       : 任意股票最终成功（计数清零）
 
 _TUSHARE_MIN_API_SEM = threading.Semaphore(2)   # 最多同时 2 个 API 调用
 
 _THROTTLE_LOCK  = threading.Lock()
 _THROTTLE_STATE = {
-    "mode":        "normal",   # "normal" | "throttled" | "abort"
-    "fail_streak": 0,          # 全局连续 API 失败计数（任意成功后清零）
-    "reset_date":  None,       # 进入非 normal 状态的日期（次日自动重置）
+    "mode":             "normal",  # "normal" | "throttled" | "abort"
+    "stock_fail_streak": 0,        # 连续「股票级」永久失败计数（任意股票成功后清零）
+    "reset_date":        None,     # 进入非 normal 状态的日期（次日自动重置）
 }
 
-_THROTTLE_NORMAL_STREAK = 20   # 连续失败 N 次 → 进入限流模式
-_THROTTLE_ABORT_STREAK  = 50   # 连续失败 M 次 → 进入中断模式
-_THROTTLE_MIN_INTERVAL  = 3.0  # 限流模式下每次 API 调用最小间隔（秒），约 20次/分钟
-_MIN_FETCH_MAX_RETRIES  = 10   # 单只股票最大 API 重试次数（超出后纳入聚合告警）
+# 阈值含义：
+#   3 只股票全部 10 次重试失败 → 接口很可能在持续限流，降速
+#   6 只股票全部 10 次重试失败 → 即使降速后仍持续失败，中断当日补全
+_THROTTLE_NORMAL_STOCK_STREAK = 3   # 连续 N 只股票永久失败 → throttled
+_THROTTLE_ABORT_STOCK_STREAK  = 6   # 连续 M 只股票永久失败 → abort（throttled 模式下累计）
+_THROTTLE_MIN_INTERVAL  = 3.0       # 限流模式下每次 API 调用最小间隔（秒），约 20次/分钟
+_MIN_FETCH_MAX_RETRIES  = 10        # 单只股票最大 API 重试次数（超出后纳入聚合告警）
 
 
 class TushareRateLimitAbort(Exception):
@@ -64,32 +73,38 @@ def _throttle_get_mode() -> str:
 
 
 def _throttle_on_success():
-    """记录一次成功，清零连续失败计数。"""
-    with _THROTTLE_LOCK:
-        _THROTTLE_STATE["fail_streak"] = 0
-
-
-def _throttle_on_fail() -> str:
     """
-    记录一次失败，必要时升级限流等级。
+    某只股票最终成功（无论第几次重试），清零股票级连续失败计数。
+    表明接口目前可用，指数退避重试有效，无需降速。
+    """
+    with _THROTTLE_LOCK:
+        _THROTTLE_STATE["stock_fail_streak"] = 0
+
+
+def _throttle_on_stock_perm_fail() -> str:
+    """
+    某只股票的所有 _MIN_FETCH_MAX_RETRIES 次重试全部耗尽且均失败时调用。
+    计数单位为「只」（stock 级），而非单次 API 调用失败次数，避免指数退避
+    期间的等待与计数产生歧义。
+
     返回更新后的模式（"normal" | "throttled" | "abort"）。
     """
     with _THROTTLE_LOCK:
-        _THROTTLE_STATE["fail_streak"] += 1
-        streak = _THROTTLE_STATE["fail_streak"]
+        _THROTTLE_STATE["stock_fail_streak"] += 1
+        streak = _THROTTLE_STATE["stock_fail_streak"]
         today  = datetime.date.today().isoformat()
 
-        if _THROTTLE_STATE["mode"] == "normal" and streak >= _THROTTLE_NORMAL_STREAK:
+        if _THROTTLE_STATE["mode"] == "normal" and streak >= _THROTTLE_NORMAL_STOCK_STREAK:
             _THROTTLE_STATE["mode"]       = "throttled"
             _THROTTLE_STATE["reset_date"] = today
             logger.warning(
-                f"[限流控制] 连续 {streak} 次 API 返回空，切换为限流模式"
-                f"（每次请求额外等待 {_THROTTLE_MIN_INTERVAL}s，≤20次/分钟）"
+                f"[限流控制] 已有 {streak} 只股票 {_MIN_FETCH_MAX_RETRIES} 次重试全部失败，"
+                f"切换为限流模式（每次请求额外等待 {_THROTTLE_MIN_INTERVAL}s，≤20次/分钟）"
             )
-        elif _THROTTLE_STATE["mode"] == "throttled" and streak >= _THROTTLE_ABORT_STREAK:
+        elif _THROTTLE_STATE["mode"] == "throttled" and streak >= _THROTTLE_ABORT_STOCK_STREAK:
             _THROTTLE_STATE["mode"] = "abort"
             logger.error(
-                f"[限流控制] 限流模式下连续 {streak} 次仍失败，触发当日补全中断。"
+                f"[限流控制] 限流模式下仍有 {streak} 只股票永久失败，触发当日补全中断。"
                 f"次日零点后自动恢复。"
             )
         return _THROTTLE_STATE["mode"]
@@ -662,7 +677,7 @@ class DataCleaner:
                     )
 
             if not raw_df.empty:
-                # 成功：清零失败计数，入库，返回
+                # 成功：清零股票级失败计数，入库，返回
                 _throttle_on_success()
                 self.clean_and_insert_kline_min(raw_df, table_name)
                 try:
@@ -677,25 +692,26 @@ class DataCleaner:
                     logger.error(f"[{ts_code}-{trade_date}] 入库后查库失败：{e}")
                 return pd.DataFrame()
 
-            # 本次 API 返回空 → 记录失败，决定是否升级限流等级
-            mode = _throttle_on_fail()
-            if mode == "abort":
-                raise TushareRateLimitAbort(
-                    f"[{ts_code}][{trade_date}] 第 {attempt} 次失败后触发 abort 模式"
-                )
-
+            # 本次 API 返回空 → 仅记录单次警告 + 指数退避等待，不计入股票级失败数
+            # （只有所有重试耗尽才算一只股票的「永久失败」，才影响限流状态机）
             backoff = min(2 ** (attempt - 1), 30)
             logger.warning(
                 f"[{ts_code}-{trade_date}] 第 {attempt}/{_MIN_FETCH_MAX_RETRIES} 次拉取返回空"
-                f"{'（已进入限流模式）' if mode == 'throttled' else ''}，{backoff}s 后重试"
+                f"{'（限流模式：已额外等待）' if mode == 'throttled' else ''}，{backoff}s 后重试"
             )
             time.sleep(backoff)
 
-        # ── Step 3: 所有重试耗尽 ─────────────────────────────────────────
+        # ── Step 3: 所有重试耗尽 → 计入股票级永久失败 ───────────────────
+        # 此时才触发限流状态机判断：N 只股票永久失败 → throttled / abort
+        mode = _throttle_on_stock_perm_fail()
         logger.error(
             f"[{ts_code}-{trade_date}] {_MIN_FETCH_MAX_RETRIES} 次重试全部失败，"
             f"纳入调用方聚合告警，跳过该股票"
         )
+        if mode == "abort":
+            raise TushareRateLimitAbort(
+                f"[{ts_code}][{trade_date}] 触发 abort 模式（连续 {_THROTTLE_ABORT_STOCK_STREAK} 只股票永久失败）"
+            )
         return pd.DataFrame()
 
 
