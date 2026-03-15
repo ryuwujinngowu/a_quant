@@ -7,7 +7,7 @@ crontab 示例（每工作日凌晨 3 点）：
 常用场景
 --------
 # 日常运行（cron，不传参）：
-  python3.8 run.py
+  nohup python3.8 -u run.py  > /dev/null 2>&1 &
 
 # 首次运行 / 指定历史起始日期（新部署时）：
   nohup python3.8 -u run.py --start-date 2024-11-01 > /dev/null 2>&1 &
