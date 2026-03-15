@@ -789,8 +789,8 @@ def retry_decorator(max_retries:  int = 3, retry_interval: float = 1.0):
                             f"参数：args={args}, kwargs={kwargs} 错误：{str(e)}"
                         )
                         return pd.DataFrame()
-                    # 未达最大次数，记录警告并等待后重试
-                    logger.warning(
+                    # 未达最大次数，降级为 debug 日志后等待重试
+                    logger.debug(
                         f"【{func.__name__}】执行异常，将进行第{retry_count}次重试（剩余{max_retries - retry_count}次） "
                         f"间隔{retry_interval}秒 错误：{str(e)}"
                     )

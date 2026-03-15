@@ -110,6 +110,12 @@ def _throttle_on_stock_perm_fail() -> str:
         return _THROTTLE_STATE["mode"]
 
 
+def is_rate_limit_aborted() -> bool:
+    """供外部模块查询当前是否处于 abort（严重限流）状态，线程安全。"""
+    with _THROTTLE_LOCK:
+        return _THROTTLE_STATE["mode"] == "abort"
+
+
 class DataCleaner:
     """数据清洗+入库核心类（优化版：精简冗余、提升效率、保留核心契约）"""
 
