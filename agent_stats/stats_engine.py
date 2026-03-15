@@ -391,12 +391,55 @@ class AgentStatsEngine:
                 self.db_operator.insert_error_record(agent.agent_id, agent.agent_name, trade_date, str(e))
                 return False
         else:
-            # skip_signal=True 说明 D 日信号已存在，从 DB 取 stock_detail 供 D+1 计算
+            # skip_signal=True：D 日信号已在 DB，先读已有信号
             try:
                 stock_detail = self.db_operator.get_signal_detail(agent.agent_id, trade_date)
             except Exception as e:
                 logger.warning(f"[{agent.agent_id}][{trade_date}] 读取已有信号失败：{e}")
                 return False
+
+            # 若已有信号为空，重新执行策略验证：
+            # 历史行情数据不变，重跑结果可信；旧代码 bug 可能导致信号错误为空，
+            # 修复后重跑可纠正。若重跑后仍为空则为真实空池，写零结账。
+            if not stock_detail:
+                logger.info(
+                    f"[{agent.agent_id}][{trade_date}] DB 中信号为空，用当日行情重新验证..."
+                )
+                try:
+                    signal_list = agent.get_signal_stock_pool(trade_date, daily_data, context)
+                    avg_ret, stock_detail = self._calc_intraday_stats(signal_list, trade_date)
+                    self.db_operator.insert_signal_record({
+                        "agent_id":            agent.agent_id,
+                        "agent_name":          agent.agent_name,
+                        "agent_desc":          agent.agent_desc,
+                        "trade_date":          trade_date,
+                        "intraday_avg_return": avg_ret,
+                        "signal_stock_detail": {"stock_list": stock_detail},
+                    })
+                    if signal_list:
+                        logger.info(
+                            f"[{agent.agent_id}][{trade_date}] 重验：命中 {len(signal_list)} 只"
+                            f"（原信号为空，已覆盖）| 日内均收益 {avg_ret:.2f}%"
+                        )
+                    else:
+                        logger.info(
+                            f"[{agent.agent_id}][{trade_date}] 重验：策略确认为空池，写零结账"
+                        )
+                    # 分钟线失败情况同样写入 DB
+                    min_failures = agent.minute_fetch_failures
+                    if min_failures:
+                        warn = (
+                            f"{len(min_failures)} 只候选分钟线 {10} 次重试失败被跳过："
+                            f" {','.join(min_failures[:10])}{'...' if len(min_failures) > 10 else ''}"
+                        )
+                        self.db_operator.mark_min_fetch_incomplete(agent.agent_id, trade_date, warn)
+                except TushareRateLimitAbort:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        f"[{agent.agent_id}][{trade_date}] 重验信号失败，保留空池：{e}"
+                    )
+                    stock_detail = []
 
         # ── Step B: 隔日表现（仅当 T+1 是已完成的历史交易日）────────────
         if next_date and next_date <= today:
