@@ -7,13 +7,13 @@ crontab 示例（每工作日凌晨 3 点）：
 常用场景
 --------
 # 日常运行（cron，不传参）：
-  python agent_stats/run.py
+  python3.8 run.py
 
 # 首次运行 / 指定历史起始日期（新部署时）：
-  nohup python3.8 -u agent_stats/run.py --start-date 2024-11-01 > temp.out 2>&1 &
+  nohup python3.8 -u run.py --start-date 2024-11-01 > /dev/null 2>&1 &
 
 # 手动重跑指定 agent（策略逻辑更新后重新计算历史）：
-  python agent_stats/run.py --reset-agent morning_limit_up,afternoon_limit_up --reset-from 2024-10-01
+  python3.8 un.py --reset-agent morning_limit_up,afternoon_limit_up --reset-from 2024-10-01
 
 # 不指定 --reset-from 则从 config.START_DATE 起重跑：
   python agent_stats/run.py --reset-agent limit_down_buy

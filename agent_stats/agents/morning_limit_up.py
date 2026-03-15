@@ -141,7 +141,7 @@ class MorningLimitUpAgent(BaseAgent):
         # ── Step 3: 并发拉取分钟线 ───────────────────────────────────────
         ts_codes = [c["ts_code"] for c in candidates]
         min_data: Dict[str, pd.DataFrame] = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = {executor.submit(_get_min_df, ts, trade_date): ts for ts in ts_codes}
             for future in concurrent.futures.as_completed(futures):
                 ts = futures[future]
