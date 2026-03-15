@@ -24,7 +24,7 @@
 """
 import concurrent.futures
 from datetime import datetime
-from typing import List, Dict
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -40,7 +40,10 @@ TOL = 0.999
 
 def _get_min_df(ts_code: str, trade_date: str) -> pd.DataFrame:
     """获取分钟线（自动入库），返回空 DF 表示无数据"""
-    return data_cleaner.get_kline_min_by_stock_date(ts_code, trade_date) or pd.DataFrame()
+    result = data_cleaner.get_kline_min_by_stock_date(ts_code, trade_date)
+    if result is None or result.empty:
+        return pd.DataFrame()
+    return result
 
 
 def _get_first_limit_time(min_df: pd.DataFrame, limit_price: float) -> Optional[datetime]:

@@ -70,14 +70,15 @@ class LimitDownBuyAgent(BaseAgent):
             return []
 
         idx = trade_dates.index(trade_date)
-        if idx < LOOKBACK_DAYS:
-            logger.info(f"[{self.agent_id}][{trade_date}] 历史数据不足 {LOOKBACK_DAYS} 日，跳过")
+        # 需要 T-1~T-5（首板）+ T-6（涨幅基准），共需 idx >= 6
+        if idx <= LOOKBACK_DAYS:
+            logger.info(f"[{self.agent_id}][{trade_date}] 历史数据不足 {LOOKBACK_DAYS + 1} 日，跳过")
             return []
 
         # T-1 ~ T-5（用于首板检查）
         prev_5_dates: List[str] = trade_dates[idx - LOOKBACK_DAYS: idx]
         # T-6（用于 5 日涨幅计算基准）
-        t6_date: str = trade_dates[idx - LOOKBACK_DAYS - 1] if idx > LOOKBACK_DAYS else None
+        t6_date: str = trade_dates[idx - LOOKBACK_DAYS - 1]
 
         # ── 构建前收价映射 ────────────────────────────────────────────────
         pre_close_map: Dict[str, float] = {}
@@ -136,34 +137,28 @@ class LimitDownBuyAgent(BaseAgent):
             return []
 
         # ── Step 3: 5 日涨幅过滤 — (T-1 close) / (T-6 close) - 1 > 30% ─
-        if t6_date is None:
-            logger.warning(f"[{self.agent_id}][{trade_date}] 无 T-6 日期，跳过涨幅过滤")
-            result = candidates
-        else:
-            cand_codes = [c["ts_code"] for c in candidates]
-            # 查询 T-1 收盘价（pre_close_map 已含）
-            # 查询 T-6 收盘价（需从 kline_day 拉取）
-            t6_df = get_kline_day_range(cand_codes, t6_date, t6_date)
-            t6_close_map: Dict[str, float] = {}
-            if not t6_df.empty and "ts_code" in t6_df.columns and "close" in t6_df.columns:
-                t6_close_map = dict(zip(t6_df["ts_code"], t6_df["close"]))
+        cand_codes = [c["ts_code"] for c in candidates]
+        t6_df = get_kline_day_range(cand_codes, t6_date, t6_date)
+        t6_close_map: Dict[str, float] = {}
+        if not t6_df.empty and "ts_code" in t6_df.columns and "close" in t6_df.columns:
+            t6_close_map = dict(zip(t6_df["ts_code"], t6_df["close"]))
 
-            result = []
-            for c in candidates:
-                ts_code   = c["ts_code"]
-                t1_close  = c["pre_close"]   # T日的前收 = T-1 收盘
-                t6_close  = t6_close_map.get(ts_code, 0.0)
-                if t6_close <= 0:
-                    logger.debug(f"[{self.agent_id}][{trade_date}][{ts_code}] 无 T-6 收盘价，跳过")
-                    continue
-                gain_5d = t1_close / t6_close - 1
-                if gain_5d <= GAIN_THRESHOLD:
-                    logger.debug(
-                        f"[{self.agent_id}][{trade_date}][{ts_code}] "
-                        f"5日涨幅 {gain_5d:.1%} ≤ {GAIN_THRESHOLD:.0%}，跳过"
-                    )
-                    continue
-                result.append(c)
+        result = []
+        for c in candidates:
+            ts_code  = c["ts_code"]
+            t1_close = c["pre_close"]   # T 日前收 = T-1 收盘
+            t6_close = t6_close_map.get(ts_code, 0.0)
+            if t6_close <= 0:
+                logger.debug(f"[{self.agent_id}][{trade_date}][{ts_code}] 无 T-6 收盘价，跳过")
+                continue
+            gain_5d = t1_close / t6_close - 1
+            if gain_5d <= GAIN_THRESHOLD:
+                logger.debug(
+                    f"[{self.agent_id}][{trade_date}][{ts_code}] "
+                    f"5日涨幅 {gain_5d:.1%} ≤ {GAIN_THRESHOLD:.0%}，跳过"
+                )
+                continue
+            result.append(c)
 
         logger.info(
             f"[{self.agent_id}][{trade_date}] 跌停板命中 {len(result)} 只"

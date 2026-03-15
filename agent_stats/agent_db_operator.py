@@ -4,12 +4,20 @@ DB 操作封装
 所有 agent_daily_profit_stats 表的读写收口于此，引擎不直接执行 SQL。
 字段约定：
   reserve_str_1 — 错误信息占位（非空说明该记录计算时出现异常）
+  reserve_str_2 — 策略描述（agent_desc）
 """
 import json
 from typing import Dict, List, Optional, Set
 from utils.db_utils import db
 from utils.log_utils import logger
 from agent_stats.config import STATS_TABLE_NAME
+
+
+def _first(rows):
+    """从 db.query() 结果列表中安全取第一行，无结果返回 None。"""
+    if rows and isinstance(rows, list) and len(rows) > 0:
+        return rows[0]
+    return None
 
 
 class AgentStatsDBOperator:
@@ -27,7 +35,7 @@ class AgentStatsDBOperator:
         """
         sql = f"SELECT agent_id, MAX(trade_date) AS max_date FROM {self.t} GROUP BY agent_id"
         try:
-            rows = db.query_all(sql)
+            rows = db.query(sql) or []
             return {
                 r["agent_id"]: r["max_date"].strftime("%Y-%m-%d")
                 for r in rows if r["max_date"]
@@ -47,7 +55,7 @@ class AgentStatsDBOperator:
             WHERE next_day_avg_close_return IS NOT NULL
         """
         try:
-            rows = db.query_all(sql)
+            rows = db.query(sql) or []
             result: Dict[str, Set[str]] = {}
             for r in rows:
                 aid  = r["agent_id"]
@@ -62,7 +70,7 @@ class AgentStatsDBOperator:
         """返回某 agent 所有已入库的交易日列表（升序）"""
         sql = f"SELECT trade_date FROM {self.t} WHERE agent_id = %s ORDER BY trade_date ASC"
         try:
-            rows = db.query_all(sql, (agent_id,))
+            rows = db.query(sql, params=(agent_id,)) or []
             return [r["trade_date"].strftime("%Y-%m-%d") for r in rows]
         except Exception as e:
             logger.error(f"[{agent_id}] get_agent_recorded_dates 失败：{e}")
@@ -75,7 +83,7 @@ class AgentStatsDBOperator:
             WHERE agent_id = %s AND trade_date = %s
         """
         try:
-            row = db.query_one(sql, (agent_id, trade_date))
+            row = _first(db.query(sql, params=(agent_id, trade_date)))
             if not row or not row.get("signal_stock_detail"):
                 return []
             detail = row["signal_stock_detail"]
@@ -94,7 +102,7 @@ class AgentStatsDBOperator:
             WHERE trade_date = %s AND next_day_avg_close_return IS NULL
         """
         try:
-            rows = db.query_all(sql, (trade_date,))
+            rows = db.query(sql, params=(trade_date,)) or []
             for r in rows:
                 if isinstance(r.get("signal_stock_detail"), str):
                     r["signal_stock_detail"] = json.loads(r["signal_stock_detail"])
@@ -107,7 +115,7 @@ class AgentStatsDBOperator:
         """兼容旧调用（run.py wechat_reporter）"""
         sql = f"SELECT MAX(trade_date) AS max_date FROM {self.t} WHERE agent_id = %s"
         try:
-            row = db.query_one(sql, (agent_id,))
+            row = _first(db.query(sql, params=(agent_id,)))
             return row["max_date"].strftime("%Y-%m-%d") if row and row["max_date"] else None
         except Exception as e:
             logger.error(f"[{agent_id}] get_last_processed_date 失败：{e}")
@@ -127,7 +135,7 @@ class AgentStatsDBOperator:
             ORDER BY intraday_avg_return DESC
         """
         try:
-            return db.query_all(sql, (trade_date,)) or []
+            return db.query(sql, params=(trade_date,)) or []
         except Exception as e:
             logger.error(f"get_latest_stats 失败：{e}")
             return []
@@ -262,7 +270,7 @@ class AgentStatsDBOperator:
         date_fmt = trade_date.replace("-", "")
         sql = "SELECT COUNT(1) AS cnt FROM kline_day WHERE trade_date = %s LIMIT 1"
         try:
-            row = db.query_one(sql, (date_fmt,))
+            row = _first(db.query(sql, params=(date_fmt,)))
             return bool(row and row["cnt"] > 0)
         except Exception as e:
             logger.error(f"check_date_data_exists 失败：{e}")
