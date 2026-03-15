@@ -251,6 +251,64 @@ class AgentStatsDBOperator:
         except Exception as e:
             logger.error(f"[{agent_id}][{trade_date}] mark_error 失败：{e}")
 
+    def mark_min_fetch_incomplete(
+        self, agent_id: str, trade_date: str, warn_msg: str
+    ) -> None:
+        """
+        当 agent 某日的信号生成阶段有分钟线永久获取失败时，将告警写入 reserve_str_1。
+        前缀 [MIN_FAIL] 与错误前缀 [ERR] 区分：
+          - [MIN_FAIL]：信号已入库但数据不完整（部分候选因分钟线缺失被跳过）
+          - [ERR]     ：信号生成完全失败
+        后续可通过 get_min_fail_records() 查找这类记录并触发重算。
+        """
+        sql = f"""
+            UPDATE {self.t} SET
+                reserve_str_1 = %s,
+                update_time   = NOW()
+            WHERE agent_id = %s AND trade_date = %s
+        """
+        try:
+            db.execute(sql, (f"[MIN_FAIL]{warn_msg[:220]}", agent_id, trade_date))
+        except Exception as e:
+            logger.error(f"[{agent_id}][{trade_date}] mark_min_fetch_incomplete 失败：{e}")
+
+    def get_min_fail_records(self) -> List[Dict]:
+        """
+        查找所有分钟线聚合告警记录（reserve_str_1 LIKE '[MIN_FAIL]%'）。
+        用于 --repair-incomplete 流程：删除这些记录，由 run_full_flow 重新处理。
+        """
+        sql = f"""
+            SELECT agent_id, trade_date
+            FROM {self.t}
+            WHERE reserve_str_1 LIKE '[MIN_FAIL]%'
+            ORDER BY agent_id, trade_date
+        """
+        try:
+            rows = db.query(sql) or []
+            return [
+                {
+                    "agent_id":   r["agent_id"],
+                    "trade_date": r["trade_date"].strftime("%Y-%m-%d"),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"get_min_fail_records 失败：{e}")
+            return []
+
+    def delete_record(self, agent_id: str, trade_date: str) -> bool:
+        """
+        精确删除单条记录（--repair-incomplete 专用）。
+        删除后，run_full_flow 的断点续跑逻辑会将该日重新纳入 dates_missing。
+        """
+        sql = f"DELETE FROM {self.t} WHERE agent_id = %s AND trade_date = %s"
+        try:
+            db.execute(sql, (agent_id, trade_date))
+            return True
+        except Exception as e:
+            logger.error(f"[{agent_id}][{trade_date}] delete_record 失败：{e}")
+            return False
+
     def delete_records_from(self, agent_id: str, from_date: str) -> int:
         """
         删除 agent 从 from_date 起（含）的所有记录。
@@ -264,6 +322,34 @@ class AgentStatsDBOperator:
         except Exception as e:
             logger.error(f"[{agent_id}] delete_records_from 失败：{e}")
             return 0
+
+    def get_empty_pool_unsettled_records(self) -> List[Dict]:
+        """
+        查找所有"信号池为空但 D+1 字段尚未显式结账"的记录。
+        条件：signal_stock_detail 含 {"stock_list": []}，且 next_day_avg_close_return IS NULL，
+              且 reserve_str_1 为空（非错误记录）。
+        用于 --repair-zeros 修复历史上因旧逻辑导致的漏结账空池记录。
+        """
+        sql = f"""
+            SELECT agent_id, trade_date
+            FROM {self.t}
+            WHERE next_day_avg_close_return IS NULL
+              AND (reserve_str_1 IS NULL OR reserve_str_1 NOT LIKE '[ERR]%')
+              AND signal_stock_detail LIKE '%"stock_list": []%'
+            ORDER BY agent_id, trade_date
+        """
+        try:
+            rows = db.query(sql) or []
+            return [
+                {
+                    "agent_id":   r["agent_id"],
+                    "trade_date": r["trade_date"].strftime("%Y-%m-%d"),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error(f"get_empty_pool_unsettled_records 失败：{e}")
+            return []
 
     def check_date_data_exists(self, trade_date: str) -> bool:
         """检查日线数据是否已入库（kline_day.trade_date 为 YYYYMMDD 格式）"""

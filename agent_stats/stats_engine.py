@@ -47,7 +47,8 @@ from agent_stats.agent_base import BaseAgent
 from agent_stats.agent_db_operator import AgentStatsDBOperator
 from utils.log_utils import logger
 from utils.common_tools import get_trade_dates, get_daily_kline_data, get_st_stock_codes, get_prev_trade_date
-from data.data_cleaner import data_cleaner
+from utils.wechat_push import send_wechat_message_to_multiple_users
+from data.data_cleaner import data_cleaner, TushareRateLimitAbort
 
 
 class AgentStatsEngine:
@@ -189,6 +190,26 @@ class AgentStatsEngine:
     # 隔日统计（T+1）
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _zero_next_day_stats() -> Dict:
+        """
+        返回一个全零的 D+1 统计字典，用于：
+          1. 当日信号池为空（无命中股票）时，显式将 D+1 字段写为 0，
+             标记该记录为"正常结账（空池）"，避免与 DB 默认值混淆。
+          2. 与 `get_agents_closed_dates`（IS NOT NULL 判断）配合，
+             确保空池记录不被引擎重复处理。
+        """
+        return {
+            "next_day_avg_open_premium":    0.0,
+            "next_day_avg_close_return":    0.0,
+            "next_day_avg_red_minute":      0,
+            "next_day_avg_profit_minute":   0,
+            "next_day_avg_intraday_profit": 0.0,
+            "next_day_avg_max_premium":     0.0,
+            "next_day_avg_max_drawdown":    0.0,
+            "next_day_stock_detail":        {"stock_list": []},
+        }
+
     def _calc_next_day_stats(
         self,
         stock_list:     List[Dict],
@@ -198,10 +219,11 @@ class AgentStatsEngine:
         """
         计算 T+1 日隔日表现。
         注意：调用前必须确认 next_trade_date 已经是过去的完整交易日，
-              否则日线/分钟线数据不存在，会返回 ({}, [])。
+              否则日线/分钟线数据不存在，会返回 (None, [])。
+        空信号池直接返回 (None, [])，由调用方（_process_one）写显式零值。
         """
         if not stock_list:
-            return {}, []
+            return None, []
 
         ts_code_list  = [s["ts_code"]          for s in stock_list]
         buy_price_map = {s["ts_code"]: s["buy_price"]          for s in stock_list}
@@ -348,6 +370,22 @@ class AgentStatsEngine:
                     f"[{agent.agent_id}][{trade_date}] 信号入库 | 命中 {len(signal_list)} 只 "
                     f"| 日内均收益 {avg_ret:.2f}%"
                 )
+                # 检查是否有分钟线永久失败的股票，写入 DB 供运维追踪
+                min_failures = agent.minute_fetch_failures
+                if min_failures:
+                    warn = (
+                        f"{len(min_failures)} 只候选分钟线 {10} 次重试失败被跳过："
+                        f" {','.join(min_failures[:10])}{'...' if len(min_failures) > 10 else ''}"
+                    )
+                    self.db_operator.mark_min_fetch_incomplete(agent.agent_id, trade_date, warn)
+                    logger.warning(f"[{agent.agent_id}][{trade_date}] ⚠ 已标记数据不完整：{warn}")
+            except TushareRateLimitAbort:
+                # 严重限流：不写 error 记录（该日未处理，下次运行断点续跑），直接向上传播
+                logger.error(
+                    f"[{agent.agent_id}][{trade_date}] Tushare 严重限流中断，该日未处理，"
+                    f"下次运行将从此日断点续跑"
+                )
+                raise
             except Exception as e:
                 logger.error(f"[{agent.agent_id}][{trade_date}] 信号生成失败：{e}", exc_info=True)
                 self.db_operator.insert_error_record(agent.agent_id, agent.agent_name, trade_date, str(e))
@@ -364,7 +402,17 @@ class AgentStatsEngine:
         if next_date and next_date <= today:
             try:
                 stats, _ = self._calc_next_day_stats(stock_detail, trade_date, next_date)
-                if stats:
+                if stats is None:
+                    # 信号池为空（无命中股票），显式写零值 D+1，标记为"正常结账（空池）"。
+                    # 避免依赖 DB 默认值：IS NOT NULL 检查需要字段为显式写入的值，
+                    # 否则 get_agents_closed_dates 无法正确识别"已结账但空池"的记录。
+                    self.db_operator.update_next_day_stats(
+                        agent.agent_id, trade_date, self._zero_next_day_stats()
+                    )
+                    logger.info(
+                        f"[{agent.agent_id}][{trade_date}] 信号池为空，D+1 写零值结账"
+                    )
+                else:
                     self.db_operator.update_next_day_stats(agent.agent_id, trade_date, stats)
                     logger.info(
                         f"[{agent.agent_id}][{trade_date}→{next_date}] "
@@ -381,6 +429,51 @@ class AgentStatsEngine:
     # ------------------------------------------------------------------ #
     # 主流程
     # ------------------------------------------------------------------ #
+
+    def repair_incomplete_records(self) -> int:
+        """
+        修复历史遗留的数据不完整记录（--repair-incomplete 模式入口）。
+
+        修复对象
+        --------
+        1. reserve_str_1 LIKE '[MIN_FAIL]%' 的记录：
+           某日信号生成时有分钟线永久失败，导致信号池不完整。
+           修复策略：删除该记录，run_full_flow 断点续跑会将其视为「新日期」
+           重新生成信号（此时分钟线已在 DB 缓存，成功率大幅提升）。
+
+        2. next_day_avg_close_return IS NULL 的非错误非空池记录：
+           D+1 统计未完成（历史遗留）。
+           修复策略：无需额外操作，run_full_flow 的 dates_unclosed 逻辑
+           已自动包含这类记录并重算 D+1。
+
+        3. 空信号池 + next_day_avg_close_return IS NULL 的记录：
+           旧版引擎未显式写零值结账。
+           修复策略：get_empty_pool_unsettled_records 仍存在，
+           此处不再写零填充，这类记录在 run_full_flow 的 dates_unclosed
+           中会被重走 _process_one(skip_signal=True)，_calc_next_day_stats
+           返回 None，进而写显式零值，完成结账。
+
+        返回：删除的 [MIN_FAIL] 记录数（run_full_flow 会重新处理这些日期）
+        """
+        records = self.db_operator.get_min_fail_records()
+        if not records:
+            logger.info("[repair-incomplete] 无分钟线聚合告警记录，D+1 NULL 记录由 run_full_flow 自动处理")
+            return 0
+
+        logger.info(f"[repair-incomplete] 发现 {len(records)} 条 [MIN_FAIL] 记录，删除后由 run_full_flow 重新处理...")
+        deleted = 0
+        for rec in records:
+            aid  = rec["agent_id"]
+            date = rec["trade_date"]
+            ok   = self.db_operator.delete_record(aid, date)
+            if ok:
+                deleted += 1
+                logger.info(f"[repair-incomplete][{aid}][{date}] ✓ 已删除，等待重新处理")
+            else:
+                logger.warning(f"[repair-incomplete][{aid}][{date}] 删除失败")
+
+        logger.info(f"[repair-incomplete] 删除完成：{deleted}/{len(records)} 条，run_full_flow 将重算这些日期")
+        return deleted
 
     def run_full_flow(self, reset_agents: Optional[Dict[str, str]] = None) -> bool:
         """
@@ -491,7 +584,8 @@ class AgentStatsEngine:
 
             context = self._get_trade_date_context(trade_date)
 
-            # 并发处理本日所有 agent（异常隔离，互不影响）
+            # 并发处理本日所有 agent（单 agent 异常隔离，互不影响）
+            # TushareRateLimitAbort 除外 — 严重限流时中止整个日期的处理
             all_agents_today = [
                 (a, False) for a in agents_need_signal
             ] + [
@@ -502,8 +596,26 @@ class AgentStatsEngine:
                 agent, skip_signal = task
                 return self._process_one(agent, trade_date, daily_data, context, today, skip_signal)
 
-            with ThreadPoolExecutor(max_workers=min(len(all_agents_today), 4)) as pool:
-                list(pool.map(_run, all_agents_today))
+            try:
+                with ThreadPoolExecutor(max_workers=min(len(all_agents_today), 4)) as pool:
+                    list(pool.map(_run, all_agents_today))
+            except TushareRateLimitAbort as e:
+                # 严重限流：未处理的 agent 本日无记录，下次运行将从断点续跑。
+                # 已处理的 agent 记录已入库，不受影响。
+                logger.error(
+                    f"[{trade_date}] Tushare 分钟线严重限流，中断当日历史补全 | {e}"
+                )
+                try:
+                    send_wechat_message_to_multiple_users(
+                        "【agent_stats 分钟线限流中断】",
+                        f"处理日期 {trade_date} 时触发 Tushare API 严重限流（连续失败超阈值），"
+                        f"当日历史补全已中断。\n\n"
+                        f"各 agent 支持断点续跑，下次凌晨 3 点 cron 或手动运行时将自动从断点恢复。\n"
+                        f"若次日仍失败，请检查 Tushare 账号当日用量是否耗尽（上限 5W 次）。"
+                    )
+                except Exception:
+                    pass
+                return False
 
         logger.info("===== AgentStatsEngine 运行完成 =====")
         return True
