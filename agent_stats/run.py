@@ -26,13 +26,37 @@ import agent_stats  # noqa: F401
 import argparse
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from agent_stats.config import MAX_RETRY_TIMES, RETRY_INTERVAL, START_DATE
 from agent_stats.stats_engine import AgentStatsEngine
 from agent_stats.wechat_reporter import AgentWechatReporter
+from data.data_cleaner import is_rate_limit_aborted
 from utils.log_utils import logger
 from utils.wechat_push import send_wechat_message_to_multiple_users
+
+
+def _sleep_until_midnight() -> None:
+    """
+    睡眠至次日零点（多5分钟缓冲），期间每小时打印一次等待日志。
+    用于 Tushare 每日配额耗尽后等待次日配额刷新，进程保持存活不需要人工重启。
+    """
+    now  = datetime.now()
+    next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+    total_secs = (next_midnight - now).total_seconds()
+    logger.info(
+        f"[限流等待] 当日 Tushare 配额耗尽，进程休眠至次日零点后（{next_midnight.strftime('%m-%d %H:%M')}），"
+        f"共需等待 {int(total_secs // 3600)}h{int((total_secs % 3600) // 60)}m"
+    )
+    slept = 0
+    check_interval = 3600  # 每小时 log 一次
+    while slept < total_secs:
+        sleep_this = min(check_interval, total_secs - slept)
+        time.sleep(sleep_this)
+        slept += sleep_this
+        remaining = total_secs - slept
+        if remaining > 60:
+            logger.info(f"[限流等待] 还需等待约 {int(remaining // 3600)}h{int((remaining % 3600) // 60)}m")
 
 
 def _parse_args():
@@ -107,12 +131,22 @@ def main():
                 if engine.all_trade_dates:
                     reporter.report_latest(engine.all_trade_dates[-1])
             else:
-                retry_count += 1
-                logger.warning(
-                    f"运行返回 False，{RETRY_INTERVAL // 60} 分钟后重试"
-                    f"（{retry_count}/{MAX_RETRY_TIMES}）"
-                )
-                time.sleep(RETRY_INTERVAL)
+                # 判断是否因 Tushare 当日配额耗尽触发 abort
+                if is_rate_limit_aborted():
+                    # 配额耗尽：sleep 至次日零点（不消耗 retry_count），
+                    # 次日配额刷新后自动恢复，无需人工干预。
+                    _sleep_until_midnight()
+                    logger.info("[限流等待] 次日零点已到，限流状态自动重置，恢复正常运行...")
+                    # 注意：_THROTTLE_STATE 在进程内存中，_throttle_get_mode 会在
+                    # 下次调用时检测到日期变化并自动重置为 normal，无需手动重置。
+                else:
+                    # 其他原因导致的 False（数据问题等），按常规重试逻辑处理
+                    retry_count += 1
+                    logger.warning(
+                        f"运行返回 False，{RETRY_INTERVAL // 60} 分钟后重试"
+                        f"（{retry_count}/{MAX_RETRY_TIMES}）"
+                    )
+                    time.sleep(RETRY_INTERVAL)
         except Exception as e:
             retry_count += 1
             logger.error(f"运行异常：{e}", exc_info=True)
