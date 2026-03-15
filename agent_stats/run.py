@@ -51,9 +51,11 @@ def _parse_args():
         help="配合 --reset-agent，指定重跑起始日期（YYYY-MM-DD）。不传则用 --start-date 或 config.START_DATE。",
     )
     parser.add_argument(
-        "--repair-zeros", action="store_true", default=False,
-        help="修复历史遗留的空信号池未结账记录（D+1 字段 NULL）。"
-             "将这些记录显式写为全零并标记结账，之后正常运行引擎。",
+        "--repair-incomplete", action="store_true", default=False,
+        help="修复历史遗留的数据不完整记录并重新计算。\n"
+             "  [MIN_FAIL] 记录（分钟线聚合告警）：删除后由引擎用断点续跑重新生成信号（缓存后成功率高）。\n"
+             "  D+1 NULL 记录（D+1 未结账）：由 run_full_flow 的 dates_unclosed 自动重算。\n"
+             "用法：python agent_stats/run.py --repair-incomplete",
     )
     return parser.parse_args()
 
@@ -79,17 +81,18 @@ def main():
     if args.reset_agent:
         logger.info(f"  --reset-agent : {args.reset_agent}")
         logger.info(f"  --reset-from  : {args.reset_from or '(使用 start_date)'}")
-    if args.repair_zeros:
-        logger.info(f"  --repair-zeros: 开启，将修复空池未结账记录后继续正常运行")
+    if args.repair_incomplete:
+        logger.info(f"  --repair-incomplete: 开启，将删除 [MIN_FAIL] 记录后由引擎断点续跑重算")
     logger.info("=" * 60)
 
     reset_agents = _build_reset_agents(args)
     engine   = AgentStatsEngine(start_date=args.start_date)
 
-    # 修复历史空池未结账记录（在正常运行前执行）
-    if args.repair_zeros:
-        fixed = engine.repair_zero_records()
-        logger.info(f"[repair-zeros] 完成，修复 {fixed} 条记录，继续正常运行引擎...")
+    # 修复数据不完整记录（在正常运行前执行，run_full_flow 会处理被删除的日期）
+    if args.repair_incomplete:
+        deleted = engine.repair_incomplete_records()
+        logger.info(f"[repair-incomplete] 完成，删除 {deleted} 条 [MIN_FAIL] 记录，"
+                    f"继续正常运行引擎（将重算这些日期）...")
     reporter = AgentWechatReporter()
 
     run_success = False

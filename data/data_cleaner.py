@@ -13,10 +13,86 @@ from utils.common_tools import calc_15_years_date_range
 from utils.db_utils import db
 from utils.log_utils import logger
 
-# 全局信号量：限制同时并发调用 Tushare 分钟线接口的线程数。
-# get_kline_min_by_stock_date 先查 DB 缓存（不受限），仅在 DB miss 时进入
-# 此信号量等待，避免历史补全期间大量并发请求超过 Tushare 100次/分钟限制。
-_TUSHARE_MIN_API_SEM = threading.Semaphore(2)
+# ── Tushare 分钟线 API 限流控制 ────────────────────────────────────────────
+# 架构说明：
+#   get_kline_min_by_stock_date 内置"查DB→拉API→入DB"缓存链。
+#   已缓存数据走快速路径（无 API 消耗），仅 DB miss 时进入限流控制区域。
+#
+# 三种状态（_THROTTLE_STATE["mode"]）：
+#   normal    — 正常并发（最多 2 线程同时调 API）
+#   throttled — 限流模式（每次 API 调用前额外 sleep 3s，≤20次/分钟）
+#   abort     — 中断模式（拒绝新 API 请求，抛 TushareRateLimitAbort）
+#
+# 状态机迁移：
+#   normal → throttled  : 全局连续失败 ≥ _THROTTLE_NORMAL_STREAK 次
+#   throttled → abort   : 全局连续失败 ≥ _THROTTLE_ABORT_STREAK 次
+#   任意 → normal       : 次日零点自动重置（每日配额刷新）
+#   任意 → normal       : 任意一次成功响应（连续失败计数清零）
+
+_TUSHARE_MIN_API_SEM = threading.Semaphore(2)   # 最多同时 2 个 API 调用
+
+_THROTTLE_LOCK  = threading.Lock()
+_THROTTLE_STATE = {
+    "mode":        "normal",   # "normal" | "throttled" | "abort"
+    "fail_streak": 0,          # 全局连续 API 失败计数（任意成功后清零）
+    "reset_date":  None,       # 进入非 normal 状态的日期（次日自动重置）
+}
+
+_THROTTLE_NORMAL_STREAK = 20   # 连续失败 N 次 → 进入限流模式
+_THROTTLE_ABORT_STREAK  = 50   # 连续失败 M 次 → 进入中断模式
+_THROTTLE_MIN_INTERVAL  = 3.0  # 限流模式下每次 API 调用最小间隔（秒），约 20次/分钟
+_MIN_FETCH_MAX_RETRIES  = 10   # 单只股票最大 API 重试次数（超出后纳入聚合告警）
+
+
+class TushareRateLimitAbort(Exception):
+    """
+    Tushare 分钟线接口严重限流或当日配额耗尽，触发当日历史补全中断。
+    继承 Exception（非 BaseException），调用方需显式捕获并向上传播。
+    次日零点后，_THROTTLE_STATE 自动重置，可恢复正常运行。
+    """
+
+
+def _throttle_get_mode() -> str:
+    """线程安全地获取当前限流模式，次日自动重置。"""
+    with _THROTTLE_LOCK:
+        today = datetime.date.today().isoformat()
+        if _THROTTLE_STATE["mode"] != "normal" and _THROTTLE_STATE["reset_date"] != today:
+            _THROTTLE_STATE["mode"] = "normal"
+            _THROTTLE_STATE["fail_streak"] = 0
+            logger.info("[限流控制] 已过零点，自动重置为正常模式")
+        return _THROTTLE_STATE["mode"]
+
+
+def _throttle_on_success():
+    """记录一次成功，清零连续失败计数。"""
+    with _THROTTLE_LOCK:
+        _THROTTLE_STATE["fail_streak"] = 0
+
+
+def _throttle_on_fail() -> str:
+    """
+    记录一次失败，必要时升级限流等级。
+    返回更新后的模式（"normal" | "throttled" | "abort"）。
+    """
+    with _THROTTLE_LOCK:
+        _THROTTLE_STATE["fail_streak"] += 1
+        streak = _THROTTLE_STATE["fail_streak"]
+        today  = datetime.date.today().isoformat()
+
+        if _THROTTLE_STATE["mode"] == "normal" and streak >= _THROTTLE_NORMAL_STREAK:
+            _THROTTLE_STATE["mode"]       = "throttled"
+            _THROTTLE_STATE["reset_date"] = today
+            logger.warning(
+                f"[限流控制] 连续 {streak} 次 API 返回空，切换为限流模式"
+                f"（每次请求额外等待 {_THROTTLE_MIN_INTERVAL}s，≤20次/分钟）"
+            )
+        elif _THROTTLE_STATE["mode"] == "throttled" and streak >= _THROTTLE_ABORT_STREAK:
+            _THROTTLE_STATE["mode"] = "abort"
+            logger.error(
+                f"[限流控制] 限流模式下连续 {streak} 次仍失败，触发当日补全中断。"
+                f"次日零点后自动恢复。"
+            )
+        return _THROTTLE_STATE["mode"]
 
 
 class DataCleaner:
@@ -506,18 +582,33 @@ class DataCleaner:
 
     def get_kline_min_by_stock_date(self, ts_code: str, trade_date: str, table_name: str = "kline_min") -> pd.DataFrame:
         """
-        获取单只股票单日分钟线数据（核心修复：查库→拉接口→入库→再查库）
-        :param ts_code: 股票代码（如000001.SZ）
-        :param trade_date: 交易日（格式：YYYY-MM-DD）
-        :param table_name: 数据库表名
-        :return: 分钟线DataFrame（空则返回空DF）
+        获取单只股票单日分钟线数据。
+
+        执行链：查DB缓存 → (miss) → 限流控制 → 带重试的 API 拉取 → 入库 → 再查DB。
+
+        限流机制
+        --------
+        - 全局状态机管理三种模式：normal / throttled / abort
+        - 连续 API 失败 ≥ _THROTTLE_NORMAL_STREAK 次 → throttled（每次 API 多等 3s）
+        - 连续失败 ≥ _THROTTLE_ABORT_STREAK 次 → abort（抛 TushareRateLimitAbort）
+        - abort 模式下，调用方（agent / engine）负责向上传播异常并发微信告警
+        - 次日零点自动重置（每日配额刷新）
+
+        重试机制
+        --------
+        - 单只股票最多重试 _MIN_FETCH_MAX_RETRIES 次
+        - 重试间隔：指数退避（1s, 2s, 4s, ... 上限 30s）
+        - 所有重试耗尽后返回空 DataFrame，调用方负责记录聚合告警
+        - 若期间进入 abort 模式则立即抛出异常，不再继续重试
+
+        raises
+        ------
+        TushareRateLimitAbort : 进入 abort 模式时抛出，调用方必须向上传播
         """
-        # 第一步：参数校验
         if not ts_code or not trade_date:
-            logger.error("股票代码/交易日为空，返回空数据")
             return pd.DataFrame()
 
-        # 第二步：查询数据库（核心修复：trade_date用字符串匹配）
+        # ── Step 1: 查 DB 缓存（快速路径，无 API 消耗）────────────────────
         sql = """
             SELECT ts_code, trade_time, trade_date, open, close, high, low, volume, amount
             FROM {table}
@@ -529,38 +620,82 @@ class DataCleaner:
             df = db.query(sql, params=(ts_code, trade_date), return_df=True)
             if not df.empty:
                 df["trade_time"] = pd.to_datetime(df["trade_time"])
-                logger.debug(f"[{ts_code}-{trade_date}] 从数据库获取分钟线，行数：{len(df)}")
+                logger.debug(f"[{ts_code}-{trade_date}] DB 缓存命中，行数：{len(df)}")
                 return df
         except Exception as e:
-            logger.error(f"[{ts_code}-{trade_date}] 查库失败：{str(e)}")
+            logger.error(f"[{ts_code}-{trade_date}] 查库失败：{e}")
 
-        # 第三步：数据库无数据，调用接口拉取
-        # 通过全局信号量限制并发 API 请求数（最多同时 2 个线程进入此区间），
-        # 防止历史补全时大量并发超过 Tushare 100次/分钟限制。
-        logger.debug(f"[{ts_code}-{trade_date}] 数据库无分钟线，等待 API 配额后拉取")
-        with _TUSHARE_MIN_API_SEM:
-            raw_df = data_fetcher.fetch_stk_mins(
-                ts_code=ts_code,
-                freq="1min",
-                start_date=f"{trade_date} 09:25:00",
-                end_date=f"{trade_date} 15:00:00"
+        # ── Step 2: DB miss — 进入限流控制区域 ───────────────────────────
+        mode = _throttle_get_mode()
+        if mode == "abort":
+            raise TushareRateLimitAbort(
+                f"[{ts_code}][{trade_date}] API 已进入中断模式，拒绝新请求"
             )
-        if raw_df.empty:
-            logger.warning(f"[{ts_code}-{trade_date}] 接口拉取失败，返回空数据")
-            return pd.DataFrame()
 
-        # 第四步：清洗+入库
-        self.clean_and_insert_kline_min(raw_df, table_name)
+        logger.debug(f"[{ts_code}-{trade_date}] DB 无缓存，进入限流控制，准备调用 API")
 
-        # 第五步：再次查询数据库（确保返回最新入库数据）
-        try:
-            df = db.query(sql, params=(ts_code, trade_date), return_df=True)
-            if not df.empty:
-                df["trade_time"] = pd.to_datetime(df["trade_time"])
-            logger.debug(f"[{ts_code}-{trade_date}] 入库后查询分钟线，行数：{len(df)}")
-            return df
-        except Exception as e:
-            logger.error(f"[{ts_code}-{trade_date}] 入库后查库失败：{str(e)}")
+        for attempt in range(1, _MIN_FETCH_MAX_RETRIES + 1):
+            # 每次尝试前检查是否刚进入 abort（其他线程触发）
+            mode = _throttle_get_mode()
+            if mode == "abort":
+                raise TushareRateLimitAbort(
+                    f"[{ts_code}][{trade_date}] 第 {attempt} 次重试前检测到 abort 模式"
+                )
+
+            # 限流模式：额外等待以确保全局请求率 ≤ 20次/分钟
+            extra_wait = _THROTTLE_MIN_INTERVAL if mode == "throttled" else 0.0
+
+            raw_df = pd.DataFrame()
+            with _TUSHARE_MIN_API_SEM:
+                if extra_wait > 0:
+                    time.sleep(extra_wait)
+                try:
+                    raw_df = data_fetcher.fetch_stk_mins(
+                        ts_code=ts_code,
+                        freq="1min",
+                        start_date=f"{trade_date} 09:25:00",
+                        end_date=f"{trade_date} 15:00:00",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[{ts_code}-{trade_date}] 第 {attempt}/{_MIN_FETCH_MAX_RETRIES} 次 fetch 异常：{e}"
+                    )
+
+            if not raw_df.empty:
+                # 成功：清零失败计数，入库，返回
+                _throttle_on_success()
+                self.clean_and_insert_kline_min(raw_df, table_name)
+                try:
+                    df = db.query(sql, params=(ts_code, trade_date), return_df=True)
+                    if not df.empty:
+                        df["trade_time"] = pd.to_datetime(df["trade_time"])
+                        logger.debug(
+                            f"[{ts_code}-{trade_date}] 第 {attempt} 次拉取成功，入库后行数：{len(df)}"
+                        )
+                        return df
+                except Exception as e:
+                    logger.error(f"[{ts_code}-{trade_date}] 入库后查库失败：{e}")
+                return pd.DataFrame()
+
+            # 本次 API 返回空 → 记录失败，决定是否升级限流等级
+            mode = _throttle_on_fail()
+            if mode == "abort":
+                raise TushareRateLimitAbort(
+                    f"[{ts_code}][{trade_date}] 第 {attempt} 次失败后触发 abort 模式"
+                )
+
+            backoff = min(2 ** (attempt - 1), 30)
+            logger.warning(
+                f"[{ts_code}-{trade_date}] 第 {attempt}/{_MIN_FETCH_MAX_RETRIES} 次拉取返回空"
+                f"{'（已进入限流模式）' if mode == 'throttled' else ''}，{backoff}s 后重试"
+            )
+            time.sleep(backoff)
+
+        # ── Step 3: 所有重试耗尽 ─────────────────────────────────────────
+        logger.error(
+            f"[{ts_code}-{trade_date}] {_MIN_FETCH_MAX_RETRIES} 次重试全部失败，"
+            f"纳入调用方聚合告警，跳过该股票"
+        )
         return pd.DataFrame()
 
 

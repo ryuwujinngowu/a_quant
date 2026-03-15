@@ -26,7 +26,7 @@ from typing import List, Dict
 import pandas as pd
 
 from agent_stats.agent_base import BaseAgent
-from data.data_cleaner import data_cleaner
+from data.data_cleaner import data_cleaner, TushareRateLimitAbort
 from utils.common_tools import calc_limit_up_price
 from utils.log_utils import logger
 
@@ -87,6 +87,7 @@ class AfternoonLimitUpAgent(BaseAgent):
         daily_data: pd.DataFrame,
         context: Dict,
     ) -> List[Dict]:
+        self.reset_minute_fetch_state()
         st_set = set(context.get("st_stock_list", []))
 
         # ── 前收价映射 ────────────────────────────────────────────────────
@@ -138,14 +139,20 @@ class AfternoonLimitUpAgent(BaseAgent):
                 ts = futures[future]
                 try:
                     min_data[ts] = future.result()
+                except TushareRateLimitAbort:
+                    # 严重限流 / 当日配额耗尽，立即向上传播，终止当日处理
+                    raise
                 except Exception as e:
-                    logger.warning(f"[{self.agent_id}][{trade_date}][{ts}] 分钟线拉取失败：{e}")
+                    logger.warning(f"[{self.agent_id}][{trade_date}][{ts}] 分钟线永久失败（已重试）：{e}")
                     min_data[ts] = pd.DataFrame()
                     fetch_failed.append(ts)
+        # 记录永久失败的股票，引擎会将此信息写入 DB
+        self._minute_fetch_failures = fetch_failed
         if fetch_failed:
             logger.warning(
-                f"[{self.agent_id}][{trade_date}] ⚠ 分钟线拉取失败 {len(fetch_failed)}/{len(ts_codes)} 只"
-                f"，这些候选将被跳过（影响信号池完整性）：{fetch_failed[:5]}{'...' if len(fetch_failed) > 5 else ''}"
+                f"[{self.agent_id}][{trade_date}] ⚠ 分钟线永久失败 {len(fetch_failed)}/{len(ts_codes)} 只"
+                f"（均经过 {10} 次重试），这些候选将被跳过并记录至 DB："
+                f" {fetch_failed[:5]}{'...' if len(fetch_failed) > 5 else ''}"
             )
 
         # ── 筛选午盘命中 ─────────────────────────────────────────────────
