@@ -151,8 +151,8 @@ class MyStrategyAgent(BaseAgent):
 | `next_day_avg_open_premium` | 次日开盘溢价（%） | mean( (T+1开盘 - 买入价) / 买入价 × 100 ) |
 | `next_day_avg_close_return` | 次日收盘收益（%） | mean( (T+1收盘 - 买入价) / 买入价 × 100 ) |
 | `next_day_avg_max_premium` | 次日最大浮盈（%） | mean( (T+1最高 - 买入价) / 买入价 × 100 ) |
-| `next_day_avg_max_drawdown` | 次日最大回撤（%） | mean( (买入价 - T+1最低) / 买入价 × 100 )；正值=曾跌破买入 |
-| `next_day_avg_intraday_profit` | 次日均价收益（%） | mean( (T+1 VWAP - 买入价) / 买入价 × 100 )，VWAP=成交额/成交量 |
+| `next_day_avg_max_drawdown` | 次日最大回撤（%） | mean( (T+1最低 - 买入价) / 买入价 × 100 )；**负值**=曾跌破买入，正值=全天未跌破 |
+| `next_day_avg_intraday_profit` | 次日均价收益（%） | mean( (T+1 VWAP - 买入价) / 买入价 × 100 )，VWAP = amount×10/volume（千元/手→元/股） |
 | `next_day_avg_red_minute` | 飘红分钟数 | mean( T+1分钟线中收盘≥T日收盘价的分钟数 ) |
 | `next_day_avg_profit_minute` | 盈利分钟数 | mean( T+1分钟线中收盘≥买入价的分钟数 ) |
 

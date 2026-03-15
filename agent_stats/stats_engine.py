@@ -250,8 +250,11 @@ class AgentStatsEngine:
             open_ret = (open_p - bp) / bp * 100
             close_ret = (close_p - bp) / bp * 100
             max_prem = (high_p - bp) / bp * 100
-            max_dd = (bp - low_p) / bp * 100
-            avg_price = amount / volume if volume > 0 else close_p
+            # 最大回撤：负值表示曾跌破买入价（亏损），正值表示全天未跌破买入价
+            max_dd = (low_p - bp) / bp * 100
+            # VWAP：amount 单位=千元，volume 单位=手（100股），须乘以 10 还原每股价格
+            # VWAP = (amount × 1000元) / (volume × 100股) = amount × 10 / volume
+            avg_price = (amount * 10) / volume if volume > 0 else close_p
             avg_prof = (avg_price - bp) / bp * 100
 
             open_dir = (
